@@ -1,0 +1,80 @@
+Project: ProxyForm — Full Stack SaaS Application
+Build a complete full-stack web application called ProxyForm. Here are the exact specifications:
+Tech Stack
+•	Backend: Node.js + Express.js
+•	Frontend: React.js with custom CSS (dark theme, no Tailwind)
+•	Database: MongoDB with Mongoose (connect via MONGODB_URI env variable)
+•	Auth: JWT tokens stored in localStorage
+•	Headless Browser: Puppeteer with puppeteer-extra-plugin-stealth
+•	Form Scraping: Cheerio + Axios
+•	Real-time Progress: Server-Sent Events (SSE)
+User Roles — 3 Types
+•	admin — Super admin, sees ALL users, their total submissions, total sites, last active. Can enable/disable users. Auto-created from env variables on first boot.
+•	user — Registers/logs in, adds target websites, auto-scrapes their forms, configures Decodo proxy, creates agent accounts and assigns sites to them.
+•	agent — Only sees a form filling interface for their assigned sites. Fills form, clicks submit, watches real-time logs, sees screenshot proof.
+Phase 1 — Auto Form Scraper
+User pastes any website URL. Backend uses Cheerio to scrape the page and detect all form fields (inputs, selects, textareas). Returns field label, name, type, CSS selector, required status, and fill order. User reviews detected fields and saves the site. Fields are stored in MongoDB.
+Phase 2 — Decodo Proxy Configuration
+User enters Decodo proxy credentials: host, port, username, password, protocol (http/https/socks5). Save to their user record in MongoDB. Include a Test Connection button that makes a request through the proxy to api.ipify.org and returns the IP.
+Phase 3 — Smart Proxy Geo-Targeting
+When agent submits a form, extract zip code (check fields named: zip, zipcode, zip_code, postal, postalcode) as first priority, or state (fields named: state, state_name) as second priority. Modify the Decodo proxy username to add geo-targeting: username-zip-90210 for zip or username-state-california for state. Apply this modified proxy to the Puppeteer browser session.
+Phase 4 — Headless Browser Auto-Fill
+Use Puppeteer with stealth plugin and the geo-targeted proxy. Navigate to target URL, wait for page load, then fill each field in ascending order (by field.order). Use human-like typing with random delays per character (40-120ms). Add random delays between fields so total fill time is 30-40 seconds. Take a screenshot after submission. Send real-time progress updates to frontend via Server-Sent Events. Store the submission result (success/fail, screenshot, duration, proxy used) in MongoDB.
+Admin Dashboard Features
+•	See all registered users in a table
+•	For each user show: name, email, role, total sites added, total submissions, last active, account status
+•	Toggle user active/inactive (disabled users cannot login)
+•	Delete users
+•	Create new users manually
+•	Stats cards at top: Total Users, Total Sites, Total Submissions, Active Users
+User Dashboard — 3 Tabs
+•	Sites & Forms tab: URL input + Scrape button, shows detected fields preview, Save button, table of saved sites with field count
+•	Agents tab: Create agent form (name, email, password, assign sites by clicking site chips), table of existing agents
+•	Proxy tab: Decodo credentials form, geo-targeting preview showing how username will be modified, Save + Test buttons
+Agent Dashboard
+•	If multiple sites assigned: show site selector on left sidebar
+•	Form fields rendered dynamically from site.fields, sorted by order
+•	Zip code fields highlighted with a star badge saying PROXY TRIGGER
+•	Submit button triggers SSE connection to backend
+•	Real-time log terminal showing each step with timestamps
+•	Progress bar showing % complete
+•	After completion: show success/failure + screenshot image
+Database Models
+User: name, email, password(hashed), role(admin/user/agent), isActive, parentUser(ref), proxy{host,port,username,password,type}, assignedSites[ref]
+Site: owner(ref), name, url, formSelector, submitSelector, fields[{label,name,type,selector,options,required,order}], isActive, scrapedAt
+Submission: agent(ref), site(ref), formData(Map), proxyUsed{host,port,location}, status(pending/processing/success/failed), screenshot, duration, errorMessage
+File Structure
+backend/server.js, backend/.env, backend/package.json
+backend/models/User.js, Site.js, Submission.js
+backend/routes/auth.js, users.js, agents.js, sites.js, proxy.js, forms.js, submit.js
+backend/services/scraper.js, puppeteer.js
+backend/middleware/auth.js
+frontend/src/App.js, index.js, index.css
+frontend/src/context/AuthContext.js
+frontend/src/pages/LoginPage.js, RegisterPage.js, AdminDashboard.js, UserDashboard.js, AgentDashboard.js
+frontend/src/components/shared/Sidebar.js
+Environment Variables (use Replit Secrets)
+MONGODB_URI = mongodb+srv://user:pass@cluster.mongodb.net/proxyform
+JWT_SECRET = your_random_secret_key
+ADMIN_EMAIL = admin@proxyform.com
+ADMIN_PASSWORD = Admin@123
+PORT = 3000
+Replit-Specific Configuration
+Since this runs on Replit, configure it as a single unified app:
+•	Build the React frontend and serve it as static files from the Express backend
+•	Use a single start command: build frontend then start backend
+•	Set PORT=3000 (Replit default)
+•	Add a .replit file with run = 'bash start.sh'
+•	Create start.sh that builds frontend and starts backend
+•	Backend serves frontend build from /public folder
+•	All API routes prefixed with /api so React Router handles everything else
+•	For Puppeteer on Replit: use executablePath to chromium, add --no-sandbox flag
+Design Requirements
+•	Dark theme throughout: background #0a0e1a, cards #131929, accent blue #3b82f6
+•	Font: DM Sans for body, Space Mono for code/numbers/logo
+•	Sidebar navigation on left, main content on right
+•	Stats cards with big numbers at top of admin and user dashboards
+•	Clean tables with subtle row hover effects
+•	Smooth modal animations for create forms
+•	Badge pills for roles and statuses
+•	Real-time log terminal with monospace font for agent submissions
