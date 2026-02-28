@@ -4,9 +4,27 @@ import { storage } from "./storage";
 import { authMiddleware, generateToken, requireRole, type JwtPayload } from "./auth";
 import { scrapeFormFields } from "./scraper";
 import { loginSchema, registerSchema, proxyConfigSchema, createAgentSchema } from "@shared/schema";
+import type { FormField } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import axios from "axios";
+import { autoFillForm, type AutoFillProgress, type ProxyConfig as BrowserProxyConfig } from "./browser";
+
+const sseClients = new Map<string, import("express").Response[]>();
+
+function sendSSE(submissionId: string, data: AutoFillProgress) {
+  const clients = sseClients.get(submissionId) || [];
+  const msg = `data: ${JSON.stringify(data)}\n\n`;
+  clients.forEach((c) => {
+    try { c.write(msg); } catch {}
+  });
+  if (data.step === "complete" || data.step === "error") {
+    clients.forEach((c) => {
+      try { c.end(); } catch {}
+    });
+    sseClients.delete(submissionId);
+  }
+}
 
 const ZIP_FIELD_NAMES = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_FIELD_NAMES = ["state", "state_name"];
@@ -385,6 +403,27 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/agent/submissions/:id/progress", authMiddleware, requireRole("agent"), async (req, res) => {
+    const submissionId = req.params.id;
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.write("\n");
+
+    if (!sseClients.has(submissionId)) {
+      sseClients.set(submissionId, []);
+    }
+    sseClients.get(submissionId)!.push(res);
+
+    req.on("close", () => {
+      const clients = sseClients.get(submissionId) || [];
+      sseClients.set(submissionId, clients.filter((c) => c !== res));
+    });
+  });
+
   app.post("/api/agent/submissions", authMiddleware, requireRole("agent"), async (req, res) => {
     try {
       const submissionPayload = z.object({
@@ -406,10 +445,14 @@ export async function registerRoutes(
       const agent = await storage.getUser(req.user!.userId);
       if (!agent) return res.status(404).json({ message: "Agent not found" });
 
+      const site = await storage.getSite(siteId);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+
       let proxyHost: string | null = null;
       let proxyPort: number | null = null;
       let proxyLocation: string | null = null;
       let geoUsername: string | null = null;
+      let browserProxy: BrowserProxyConfig | null = null;
 
       if (agent.parentUserId) {
         const parentUser = await storage.getUser(agent.parentUserId);
@@ -419,6 +462,13 @@ export async function registerRoutes(
           proxyHost = parentUser.proxyHost;
           proxyPort = parentUser.proxyPort;
           proxyLocation = geo.type ? `${geo.type}-${geo.value}` : null;
+          browserProxy = {
+            host: parentUser.proxyHost,
+            port: parentUser.proxyPort,
+            username: geoUsername,
+            password: parentUser.proxyPassword,
+            protocol: parentUser.proxyType || "http",
+          };
         }
       }
 
@@ -429,12 +479,36 @@ export async function registerRoutes(
         proxyHost,
         proxyPort,
         proxyLocation,
-        status: "pending",
+        status: "running",
       });
 
-      return res.json({
+      res.json({
         ...submission,
         geoUsername,
+      });
+
+      const fields = (site.fields || []) as FormField[];
+
+      autoFillForm(
+        site.url,
+        fields,
+        formData,
+        site.submitSelector,
+        browserProxy,
+        (progress) => sendSSE(submission.id, progress)
+      ).then(async (result) => {
+        await storage.updateSubmission(submission.id, {
+          status: result.success ? "success" : "failed",
+          screenshot: result.screenshot,
+          duration: result.duration,
+          errorMessage: result.errorMessage,
+        });
+      }).catch(async (err) => {
+        await storage.updateSubmission(submission.id, {
+          status: "failed",
+          errorMessage: err.message,
+        });
+        sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
       });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });

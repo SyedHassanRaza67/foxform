@@ -30,13 +30,20 @@ export function verifyToken(token: string): JwtPayload | null {
 }
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  let token: string | undefined;
+
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
+  } else if (req.query.token && typeof req.query.token === "string") {
+    token = req.query.token;
+  }
+
+  if (!token) {
     res.status(401).json({ message: "Authentication required" });
     return;
   }
 
-  const token = authHeader.split(" ")[1];
   const payload = verifyToken(token);
   if (!payload) {
     res.status(401).json({ message: "Invalid or expired token" });

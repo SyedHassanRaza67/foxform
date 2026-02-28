@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -10,22 +10,88 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
 import {
-  Globe, Star, Send, Loader2, FileText, Clock, MapPin, Shield
+  Globe, Star, Send, Loader2, FileText, Clock, MapPin, Shield,
+  Monitor, Camera, CheckCircle2, XCircle, Timer
 } from "lucide-react";
 import type { FormField, Site, Submission } from "@shared/schema";
 
 const ZIP_FIELDS = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_FIELDS = ["state", "state_name"];
 
+interface AutoFillProgress {
+  step: string;
+  detail: string;
+  percent: number;
+  timestamp: number;
+}
+
 export default function AgentDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
+  const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
+  const [progressUpdates, setProgressUpdates] = useState<AutoFillProgress[]>([]);
+  const [currentProgress, setCurrentProgress] = useState<AutoFillProgress | null>(null);
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const progressContainerRef = useRef<HTMLDivElement>(null);
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/agent/sites"] });
   const submissionsQuery = useQuery<Submission[]>({ queryKey: ["/api/agent/submissions"] });
+
+  const connectSSE = useCallback((submissionId: string) => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const token = localStorage.getItem("proxyform_token");
+    if (!token) return;
+    const es = new EventSource(`/api/agent/submissions/${submissionId}/progress?token=${token}`);
+    eventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const progress: AutoFillProgress = JSON.parse(event.data);
+        setCurrentProgress(progress);
+        setProgressUpdates((prev) => [...prev, progress]);
+
+        if (progress.step === "complete" || progress.step === "error") {
+          es.close();
+          eventSourceRef.current = null;
+          queryClient.invalidateQueries({ queryKey: ["/api/agent/submissions"] });
+
+          if (progress.step === "complete") {
+            toast({ title: "Auto-fill complete", description: progress.detail });
+          } else {
+            toast({ title: "Auto-fill failed", description: progress.detail, variant: "destructive" });
+          }
+        }
+      } catch {}
+    };
+
+    es.onerror = () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, [toast]);
+
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (progressContainerRef.current) {
+      progressContainerRef.current.scrollTop = progressContainerRef.current.scrollHeight;
+    }
+  }, [progressUpdates]);
 
   const submitMutation = useMutation({
     mutationFn: async () => {
@@ -36,12 +102,16 @@ export default function AgentDashboard() {
       return res.json();
     },
     onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/agent/submissions"] });
+      setActiveSubmissionId(data.id);
+      setProgressUpdates([]);
+      setCurrentProgress(null);
       setFormData({});
+      connectSSE(data.id);
+
       const locationMsg = data.proxyLocation
-        ? ` | Proxy: ${data.geoUsername || "N/A"}`
+        ? ` | Geo: ${data.proxyLocation}`
         : "";
-      toast({ title: `Form submitted successfully${locationMsg}` });
+      toast({ title: `Submission started${locationMsg}` });
     },
     onError: (err: any) => {
       toast({ title: "Submission failed", description: err.message, variant: "destructive" });
@@ -71,6 +141,7 @@ export default function AgentDashboard() {
   }, [formData]);
 
   const hasGeoFields = fields.some((f) => isGeoField(f.name));
+  const isRunning = activeSubmissionId && currentProgress && currentProgress.step !== "complete" && currentProgress.step !== "error";
 
   if (sitesQuery.isLoading) {
     return (
@@ -225,16 +296,55 @@ export default function AgentDashboard() {
             <Button
               className="w-full mt-4"
               onClick={() => submitMutation.mutate()}
-              disabled={submitMutation.isPending}
+              disabled={submitMutation.isPending || !!isRunning}
               data-testid="button-submit-form"
             >
-              {submitMutation.isPending ? (
+              {submitMutation.isPending || isRunning ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <Send className="w-4 h-4 mr-2" />
               )}
-              Submit Form
+              {isRunning ? "Auto-Fill Running..." : "Submit & Auto-Fill"}
             </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {activeSubmissionId && progressUpdates.length > 0 && (
+        <Card data-testid="card-autofill-progress">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Monitor className="w-4 h-4" />
+              Auto-Fill Progress
+              {isRunning && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
+              {currentProgress?.step === "complete" && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+              {currentProgress?.step === "error" && <XCircle className="w-4 h-4 text-destructive" />}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Progress value={currentProgress?.percent || 0} className="h-2" data-testid="progress-autofill" />
+            <p className="text-sm font-medium" data-testid="text-progress-detail">
+              {currentProgress?.detail || "Initializing..."}
+            </p>
+
+            <div ref={progressContainerRef} className="max-h-48 overflow-y-auto rounded-md bg-muted p-3 space-y-1">
+              {progressUpdates.map((p, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs">
+                  <span className="text-muted-foreground font-mono shrink-0 w-12">
+                    {Math.round((p.timestamp - progressUpdates[0].timestamp) / 1000)}s
+                  </span>
+                  <span className={
+                    p.step === "error" || p.step === "field_warning" || p.step === "submit_warning"
+                      ? "text-destructive"
+                      : p.step === "complete"
+                      ? "text-emerald-500"
+                      : "text-foreground"
+                  }>
+                    {p.detail}
+                  </span>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -243,7 +353,7 @@ export default function AgentDashboard() {
         <div>
           <h3 className="text-lg font-semibold mb-3">Recent Submissions</h3>
           <div className="space-y-2">
-            {submissionsQuery.data.slice(0, 5).map((sub) => (
+            {submissionsQuery.data.slice(0, 10).map((sub) => (
               <Card key={sub.id} className="hover-elevate" data-testid={`card-submission-${sub.id}`}>
                 <CardContent className="p-4 flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-3">
@@ -252,7 +362,7 @@ export default function AgentDashboard() {
                       <p className="text-sm font-medium">
                         {sub.createdAt ? new Date(sub.createdAt).toLocaleString() : "Unknown"}
                       </p>
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         {sub.proxyLocation && (
                           <span className="text-xs font-mono text-primary flex items-center gap-1" data-testid={`text-proxy-location-${sub.id}`}>
                             <MapPin className="w-3 h-3" />
@@ -264,23 +374,67 @@ export default function AgentDashboard() {
                             via {sub.proxyHost}
                           </span>
                         )}
-                        {!sub.proxyLocation && (
-                          <span className="text-xs text-muted-foreground">
-                            Duration: {sub.duration ? `${sub.duration}ms` : "N/A"}
+                        {sub.duration && (
+                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Timer className="w-3 h-3" />
+                            {(sub.duration / 1000).toFixed(1)}s
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
-                  <Badge variant={sub.status === "success" ? "default" : sub.status === "failed" ? "destructive" : "secondary"}>
-                    {sub.status}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {sub.screenshot && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2"
+                        onClick={() => setScreenshotUrl(sub.screenshot)}
+                        data-testid={`button-screenshot-${sub.id}`}
+                      >
+                        <Camera className="w-3.5 h-3.5 mr-1" />
+                        Screenshot
+                      </Button>
+                    )}
+                    <Badge variant={
+                      sub.status === "success" ? "default"
+                        : sub.status === "failed" ? "destructive"
+                        : sub.status === "running" ? "secondary"
+                        : "secondary"
+                    }>
+                      {sub.status === "running" && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                      {sub.status}
+                    </Badge>
+                  </div>
                 </CardContent>
+                {sub.errorMessage && (
+                  <div className="px-4 pb-3">
+                    <p className="text-xs text-destructive bg-destructive/10 rounded p-2" data-testid={`text-error-${sub.id}`}>
+                      {sub.errorMessage}
+                    </p>
+                  </div>
+                )}
               </Card>
             ))}
           </div>
         </div>
       )}
+
+      <Dialog open={!!screenshotUrl} onOpenChange={() => setScreenshotUrl(null)}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Submission Screenshot</DialogTitle>
+          </DialogHeader>
+          {screenshotUrl && (
+            <img
+              src={screenshotUrl}
+              alt="Form submission screenshot"
+              className="w-full rounded-md border"
+              data-testid="img-screenshot"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

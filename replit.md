@@ -6,8 +6,9 @@ Full-stack SaaS application for automated proxy-based form filling.
 - **Frontend**: React + TypeScript + Tailwind CSS + Shadcn UI
 - **Backend**: Node.js + Express.js
 - **Database**: PostgreSQL with Drizzle ORM
-- **Auth**: JWT tokens stored in localStorage
+- **Auth**: JWT tokens stored in localStorage (supports Bearer header + query param for SSE)
 - **Form Scraping**: Cheerio + Axios
+- **Browser Automation**: Puppeteer + puppeteer-extra + stealth plugin
 
 ## Architecture
 
@@ -24,14 +25,15 @@ Full-stack SaaS application for automated proxy-based form filling.
 
 ### Key Files
 - `shared/schema.ts` - All database schemas and Zod validation
-- `server/routes.ts` - All API endpoints
+- `server/routes.ts` - All API endpoints (includes SSE for auto-fill progress)
 - `server/storage.ts` - Database CRUD operations
-- `server/auth.ts` - JWT middleware
+- `server/auth.ts` - JWT middleware (Bearer header + query param)
 - `server/scraper.ts` - Cheerio form scraper
+- `server/browser.ts` - Puppeteer auto-fill engine with stealth plugin
 - `client/src/lib/auth.tsx` - Auth context provider
 - `client/src/pages/admin-dashboard.tsx` - Admin panel
 - `client/src/pages/user-dashboard.tsx` - User dashboard with 3 tabs
-- `client/src/pages/agent-dashboard.tsx` - Agent form filling interface
+- `client/src/pages/agent-dashboard.tsx` - Agent form filling + live progress UI
 - `client/src/components/app-sidebar.tsx` - Navigation sidebar
 
 ### API Routes
@@ -55,6 +57,8 @@ Full-stack SaaS application for automated proxy-based form filling.
 - `POST /api/proxy/test` - Test proxy connection
 - `GET /api/agent/sites` - Agent's assigned sites
 - `GET /api/agent/submissions` - Agent's submissions
+- `GET /api/agent/submissions/:id/progress` - SSE stream for auto-fill progress
+- `POST /api/agent/submissions` - Submit form & trigger Puppeteer auto-fill
 
 ### Design
 - Dark theme (forced via HTML class="dark")
@@ -72,7 +76,17 @@ Full-stack SaaS application for automated proxy-based form filling.
 - Phase 1: Auto Form Scraper (COMPLETE)
 - Phase 2: Decodo Proxy Configuration (COMPLETE - polished UI with status badge, test results, geo preview)
 - Phase 3: Smart Proxy Geo-Targeting (COMPLETE - backend extraction, agent UI preview, submission tracking)
-- Phase 4: Headless Browser Auto-Fill with Puppeteer (planned)
+- Phase 4: Headless Browser Auto-Fill (COMPLETE - Puppeteer + stealth, human-like typing 40-120ms, SSE progress, screenshot capture)
+
+### Auto-Fill Engine (server/browser.ts)
+- Uses puppeteer-extra with stealth plugin to avoid bot detection
+- Geo-targeted proxy passed as --proxy-server launch arg + page.authenticate()
+- Fields filled in ascending order by field.order
+- Human-like typing: random 40-120ms delay per character
+- Random inter-field delays calibrated so total fill time is ~30-40 seconds
+- Takes screenshot after submission
+- Sends real-time progress via SSE (text/event-stream)
+- Results stored in PostgreSQL submissions table (status, screenshot as base64, duration, errorMessage)
 
 ### Environment Variables
 - DATABASE_URL - PostgreSQL connection

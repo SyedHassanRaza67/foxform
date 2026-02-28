@@ -29,6 +29,7 @@ export interface IStorage {
   getSitesForAgent(agentId: string): Promise<Site[]>;
 
   createSubmission(data: Partial<Submission>): Promise<Submission>;
+  updateSubmission(id: string, data: Partial<Submission>): Promise<Submission | undefined>;
   getSubmissionsByAgent(agentId: string): Promise<Submission[]>;
   getSubmissionsBySite(siteId: string): Promise<Submission[]>;
   getAllSubmissions(): Promise<Submission[]>;
@@ -139,6 +140,11 @@ export class DatabaseStorage implements IStorage {
 
   async createSubmission(data: Partial<Submission>): Promise<Submission> {
     const [sub] = await db.insert(submissions).values(data as any).returning();
+    return sub;
+  }
+
+  async updateSubmission(id: string, data: Partial<Submission>): Promise<Submission | undefined> {
+    const [sub] = await db.update(submissions).set(data as any).where(eq(submissions.id, id)).returning();
     return sub;
   }
 
