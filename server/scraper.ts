@@ -20,45 +20,86 @@ export async function scrapeFormFields(url: string): Promise<ScrapeResult> {
 
   const $ = cheerio.load(response.data);
 
-  const form = findMainForm($);
-  const formSelector = form.length ? getSelector($, form) : null;
+  // Remove invisible/hidden elements so they don't pollute field counts
+  $("[style*='display:none'], [style*='display: none'], [hidden]").remove();
 
-  const submitBtn = form.length
-    ? form.find('button[type="submit"], input[type="submit"], button:not([type])').first()
-    : $('button[type="submit"], input[type="submit"]').first();
-  const submitSelector = submitBtn.length ? getSelector($, submitBtn) : null;
+  const { scope, formSelector } = findBestFormScope($);
 
-  const scope = form.length ? form : $("body");
+  const submitBtn = scope.find('button[type="submit"], input[type="submit"]').first()
+    || $('button[type="submit"], input[type="submit"]').first();
+  const submitSelector = submitBtn.length ? buildSelector($, submitBtn) : null;
+
   const fields = extractFields($, scope);
 
   return { fields, formSelector, submitSelector };
 }
 
-function findMainForm($: cheerio.CheerioAPI): cheerio.Cheerio<cheerio.Element> {
+// ─── Scope detection ──────────────────────────────────────────────────────────
+
+const VISIBLE_INPUTS = "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']):not([type='image']):not([type='file']), select, textarea";
+
+function countVisibleInputs($: cheerio.CheerioAPI, el: cheerio.Cheerio<cheerio.Element>): number {
+  return el.find(VISIBLE_INPUTS).length;
+}
+
+function findBestFormScope($: cheerio.CheerioAPI): {
+  scope: cheerio.Cheerio<cheerio.Element>;
+  formSelector: string | null;
+} {
   const forms = $("form");
-  if (forms.length === 0) return $() as any;
-  if (forms.length === 1) return forms.first();
 
-  let bestForm = forms.first();
-  let bestCount = 0;
+  if (forms.length > 0) {
+    let bestForm = forms.first();
+    let bestCount = countVisibleInputs($, bestForm);
 
-  forms.each((_i, formEl) => {
-    const $f = $(formEl);
-    const inputCount = $f.find("input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']):not([type='image']):not([type='file']), select, textarea").length;
-    if (inputCount > bestCount) {
-      bestCount = inputCount;
-      bestForm = $f;
+    forms.each((_i, formEl) => {
+      const $f = $(formEl);
+      const count = countVisibleInputs($, $f);
+      if (count > bestCount) {
+        bestCount = count;
+        bestForm = $f;
+      }
+    });
+
+    // If best form has at least 1 visible field, use it
+    if (bestCount >= 1) {
+      return { scope: bestForm, formSelector: buildSelector($, bestForm) };
+    }
+  }
+
+  // Fallback: scan for the div/section/article container with the most inputs
+  const containers: Array<{ el: cheerio.Cheerio<cheerio.Element>; count: number }> = [];
+  $("div, section, article, main, aside").each((_i, el) => {
+    const $el = $(el);
+    const count = countVisibleInputs($, $el);
+    if (count >= 2) {
+      containers.push({ el: $el, count });
     }
   });
 
-  return bestForm;
+  if (containers.length > 0) {
+    // Pick smallest container with the highest count (most specific)
+    containers.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      // Prefer the more nested element (likely more specific)
+      return (b.el.find("*").length || 0) - (a.el.find("*").length || 0);
+    });
+    const best = containers[0].el;
+    return { scope: best, formSelector: null };
+  }
+
+  // Last resort: whole body
+  return { scope: $("body"), formSelector: null };
 }
+
+// ─── Field extraction ─────────────────────────────────────────────────────────
 
 function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Element>): FormField[] {
   const fields: FormField[] = [];
   let order = 1;
   const seenNames = new Map<string, number>();
 
+  // Process inputs, selects, textareas in DOM order (excludes radio for grouped handling)
   scope.find("input, select, textarea").each((_i, el) => {
     const $el = $(el);
     const tag = ($el.prop("tagName")?.toLowerCase() || "input");
@@ -66,33 +107,33 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
 
     if (["hidden", "submit", "button", "reset", "image", "file"].includes(rawType)) return;
 
+    // Radio buttons handled separately as groups below
+    if (rawType === "radio") return;
+
     const rawName = $el.attr("name") || $el.attr("id") || "";
     if (!rawName) return;
-
-    if (rawType === "radio") return;
 
     if (rawType === "checkbox") {
       const value = $el.attr("value") || "on";
       const label = getLabel($, $el) || value || rawName;
       let fieldName = rawName;
 
+      // Deduplicate checkboxes sharing the same name (e.g. serviceType[])
+      const baseName = rawName.replace(/\[\]$/, "");
       if (rawName.endsWith("[]") || seenNames.has(rawName)) {
-        const suffix = value
+        const suffix = value !== "on"
           ? value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
-          : String(seenNames.get(rawName) || 0);
-        fieldName = `${rawName.replace("[]", "")}_${suffix}`;
+          : String(seenNames.get(rawName) ?? 0);
+        fieldName = `${baseName}_${suffix}`;
       }
 
-      const count = (seenNames.get(rawName) || 0) + 1;
-      seenNames.set(rawName, count);
-
-      const selector = getUniqueSelector($, $el, _i);
+      seenNames.set(rawName, (seenNames.get(rawName) ?? 0) + 1);
 
       fields.push({
         label,
         name: fieldName,
         type: "checkbox",
-        selector,
+        selector: getUniqueSelector($, $el),
         options: value ? [value] : undefined,
         required: $el.attr("required") !== undefined,
         order: order++,
@@ -100,24 +141,22 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
       return;
     }
 
+    // Regular fields – skip duplicates
     if (seenNames.has(rawName)) {
-      const count = (seenNames.get(rawName) || 0) + 1;
-      seenNames.set(rawName, count);
+      seenNames.set(rawName, (seenNames.get(rawName) ?? 0) + 1);
       return;
     }
     seenNames.set(rawName, 1);
 
     const label = getLabel($, $el) || rawName;
-    const selector = getSelector($, $el);
+    const selector = buildSelector($, $el);
     const required = $el.attr("required") !== undefined || $el.attr("aria-required") === "true";
 
     const options: string[] = [];
     if (tag === "select") {
       $el.find("option").each((_j, opt) => {
         const val = $(opt).attr("value");
-        if (val && val !== "") {
-          options.push(val);
-        }
+        if (val && val !== "") options.push(val);
       });
     }
 
@@ -134,21 +173,30 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
     });
   });
 
-  const radioGroups = new Map<string, { options: string[]; labels: string[]; selector: string; required: boolean }>();
+  // Process radio groups as single fields
+  const radioGroups = new Map<string, {
+    options: string[];
+    optionLabels: string[];
+    groupLabel: string;
+    selector: string;
+    required: boolean;
+  }>();
 
-  let radioIndex = 0;
   scope.find('input[type="radio"]').each((_i, el) => {
     const $el = $(el);
     const name = $el.attr("name") || "";
     if (!name) return;
 
-    const value = $el.attr("value") || $el.attr("id") || `option_${radioIndex++}`;
-    const label = getLabel($, $el) || value;
+    const value = $el.attr("value") || $el.attr("id") || `option_${_i}`;
+    const optLabel = getLabel($, $el) || value;
 
     if (!radioGroups.has(name)) {
+      // Try to get a group-level label from <legend>, or a heading/label preceding the fieldset
+      const groupLabel = getRadioGroupLabel($, $el, name);
       radioGroups.set(name, {
         options: [],
-        labels: [],
+        optionLabels: [],
+        groupLabel,
         selector: `input[name="${name}"]`,
         required: $el.attr("required") !== undefined,
       });
@@ -157,14 +205,13 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
     const group = radioGroups.get(name)!;
     if (!group.options.includes(value)) {
       group.options.push(value);
-      group.labels.push(label);
+      group.optionLabels.push(optLabel);
     }
   });
 
   for (const [name, group] of radioGroups) {
-    const groupLabel = group.labels[0] || name;
     fields.push({
-      label: groupLabel,
+      label: group.groupLabel,
       name,
       type: "radio",
       selector: group.selector,
@@ -177,56 +224,118 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
   return fields;
 }
 
+// ─── Label detection ──────────────────────────────────────────────────────────
+
 function getLabel($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
+  // 1. Explicit <label for="id">
   const id = $el.attr("id");
   if (id) {
-    const label = $(`label[for="${id}"]`).first().text().trim();
-    if (label) return label;
+    const lbl = $(`label[for="${id}"]`).first().text().trim();
+    if (lbl) return lbl;
   }
 
-  const parentLabel = $el.closest("label").text().trim();
-  if (parentLabel) {
-    const inputText = $el.val()?.toString() || "";
-    const cleaned = parentLabel.replace(inputText, "").trim();
-    if (cleaned && cleaned.length < 100) return cleaned;
+  // 2. Wrapping <label>
+  const parentLabel = $el.closest("label");
+  if (parentLabel.length) {
+    // Clone, remove the input itself, take remaining text
+    const clone = parentLabel.clone();
+    clone.find("input, select, textarea").remove();
+    const text = clone.text().trim();
+    if (text && text.length < 120) return text;
   }
+
+  // 3. aria-label / placeholder / title
+  const ariaLabel = $el.attr("aria-label");
+  if (ariaLabel) return ariaLabel;
 
   const placeholder = $el.attr("placeholder");
   if (placeholder) return placeholder;
 
-  const ariaLabel = $el.attr("aria-label");
-  if (ariaLabel) return ariaLabel;
-
   const title = $el.attr("title");
   if (title) return title;
 
-  const prev = $el.prev("label, span, p");
+  // 4. Previous sibling: label, span, p, div, li
+  const prev = $el.prevAll("label, span, p, div, legend, h1, h2, h3, h4, h5, h6, li").first();
   if (prev.length) {
-    const prevText = prev.text().trim();
-    if (prevText && prevText.length < 80) return prevText;
+    const text = prev.text().trim();
+    if (text && text.length < 100) return text;
+  }
+
+  // 5. Parent row/cell label (table-based forms)
+  const cell = $el.closest("td, th");
+  if (cell.length) {
+    const prevCell = cell.prev("td, th");
+    if (prevCell.length) {
+      const text = prevCell.text().trim();
+      if (text && text.length < 100) return text;
+    }
+  }
+
+  // 6. Parent container text before the input (walk up 2 levels)
+  const parent = $el.parent();
+  if (parent.length) {
+    const clone = parent.clone();
+    clone.find("input, select, textarea, button").remove();
+    const text = clone.text().trim();
+    if (text && text.length > 0 && text.length < 80) return text;
   }
 
   return "";
 }
 
-function getSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
+function getRadioGroupLabel($: cheerio.CheerioAPI, $firstRadio: cheerio.Cheerio<cheerio.Element>, name: string): string {
+  // Check fieldset > legend
+  const fieldset = $firstRadio.closest("fieldset");
+  if (fieldset.length) {
+    const legend = fieldset.find("legend").first().text().trim();
+    if (legend) return legend;
+  }
+
+  // Check aria-labelledby
+  const labelledBy = $firstRadio.attr("aria-labelledby");
+  if (labelledBy) {
+    const labelEl = $(`#${labelledBy}`).first().text().trim();
+    if (labelEl) return labelEl;
+  }
+
+  // Look for a heading or label immediately before the group's container
+  const container = $firstRadio.closest("div, section, fieldset, li");
+  if (container.length) {
+    const prev = container.prevAll("label, span, p, h1, h2, h3, h4, h5, h6, legend, div").first();
+    if (prev.length) {
+      const text = prev.text().trim();
+      if (text && text.length < 100) return text;
+    }
+
+    // Also check if the container itself starts with a label-like element
+    const firstChild = container.children("label, span, p, strong, legend, h1, h2, h3, h4, h5, h6").first();
+    if (firstChild.length) {
+      const text = firstChild.text().trim();
+      if (text && text.length < 100) return text;
+    }
+  }
+
+  // Fall back to the name attribute
+  return name.replace(/[_[\]]+/g, " ").trim();
+}
+
+// ─── Selector building ────────────────────────────────────────────────────────
+
+function buildSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
   const id = $el.attr("id");
-  if (id) return `#${id}`;
+  if (id) return `#${CSS.escape ? CSS.escape(id) : id}`;
 
   const name = $el.attr("name");
   const tag = $el.prop("tagName")?.toLowerCase() || "input";
   if (name) return `${tag}[name="${name}"]`;
 
-  const classes = $el.attr("class");
-  if (classes) {
-    const classList = classes.split(/\s+/).filter(c => c.length > 0).slice(0, 2).join(".");
-    return `${tag}.${classList}`;
-  }
+  const classes = ($el.attr("class") || "").split(/\s+/).filter((c) => c.length > 0).slice(0, 2).join(".");
+  if (classes) return `${tag}.${classes}`;
 
   return tag;
 }
 
-function getUniqueSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>, index: number): string {
+function getUniqueSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
   const id = $el.attr("id");
   if (id) return `#${id}`;
 
@@ -234,9 +343,7 @@ function getUniqueSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.E
   const value = $el.attr("value");
   const tag = $el.prop("tagName")?.toLowerCase() || "input";
 
-  if (name && value) {
-    return `${tag}[name="${name}"][value="${value}"]`;
-  }
+  if (name && value) return `${tag}[name="${name}"][value="${value}"]`;
 
   if (name) {
     const sameNameEls = $(`${tag}[name="${name}"]`);
@@ -249,5 +356,5 @@ function getUniqueSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.E
     return `${tag}[name="${name}"]:nth-of-type(${elIndex + 1})`;
   }
 
-  return `${tag}:nth-child(${index + 1})`;
+  return tag;
 }

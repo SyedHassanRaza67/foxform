@@ -16,6 +16,7 @@ export const users = pgTable("users", {
   proxyUsername: text("proxy_username"),
   proxyPassword: text("proxy_password"),
   proxyType: text("proxy_type").default("http"),
+  proxySiteIds: jsonb("proxy_site_ids").$type<string[] | null>().default(null),
   lastActive: timestamp("last_active").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 });

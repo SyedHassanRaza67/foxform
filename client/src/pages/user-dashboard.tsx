@@ -34,6 +34,7 @@ interface ProxyConfig {
   proxyUsername: string;
   proxyPassword: string;
   proxyType: string;
+  proxySiteIds: string[] | null;
 }
 
 function SitesTab() {
@@ -502,6 +503,7 @@ function ProxyTab() {
   const { toast } = useToast();
 
   const proxyQuery = useQuery<ProxyConfig>({ queryKey: ["/api/proxy"] });
+  const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/sites"] });
 
   const [config, setConfig] = useState<ProxyConfig>({
     proxyHost: "",
@@ -509,6 +511,7 @@ function ProxyTab() {
     proxyUsername: "",
     proxyPassword: "",
     proxyType: "http",
+    proxySiteIds: null,
   });
   const [initialized, setInitialized] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; ip?: string; message?: string } | null>(null);
@@ -519,6 +522,23 @@ function ProxyTab() {
   }
 
   const isConfigured = config.proxyHost && config.proxyPort && config.proxyUsername;
+  const sites = sitesQuery.data || [];
+
+  // null = all sites, array = specific sites
+  const applyToAll = config.proxySiteIds === null;
+
+  const toggleApplyToAll = () => {
+    setConfig({ ...config, proxySiteIds: applyToAll ? [] : null });
+  };
+
+  const toggleSite = (siteId: string) => {
+    const current = config.proxySiteIds ?? [];
+    if (current.includes(siteId)) {
+      setConfig({ ...config, proxySiteIds: current.filter((id) => id !== siteId) });
+    } else {
+      setConfig({ ...config, proxySiteIds: [...current, siteId] });
+    }
+  };
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -657,6 +677,85 @@ function ProxyTab() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-6 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-primary" />
+              <h4 className="text-sm font-semibold">Proxy Site Assignment</h4>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Choose which sites this proxy applies to when agents submit forms.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={toggleApplyToAll}
+              className={`w-full flex items-center justify-between rounded-md border px-4 py-3 text-sm transition-colors ${
+                applyToAll
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "border-border bg-muted/30 text-muted-foreground hover:border-primary/50"
+              }`}
+              data-testid="button-proxy-all-sites"
+            >
+              <span className="font-medium">All Sites</span>
+              <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${applyToAll ? "border-primary bg-primary" : "border-muted-foreground"}`}>
+                {applyToAll && <div className="w-2 h-2 rounded-full bg-white" />}
+              </div>
+            </button>
+
+            {sites.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Or select specific sites</p>
+                {sites.map((site) => {
+                  const isSelected = !applyToAll && (config.proxySiteIds ?? []).includes(site.id);
+                  return (
+                    <button
+                      key={site.id}
+                      type="button"
+                      onClick={() => { if (applyToAll) toggleApplyToAll(); toggleSite(site.id); }}
+                      className={`w-full flex items-center justify-between rounded-md border px-4 py-2.5 text-sm transition-colors ${
+                        isSelected
+                          ? "border-primary bg-primary/5"
+                          : "border-border bg-background hover:border-primary/50"
+                      }`}
+                      data-testid={`button-proxy-site-${site.id}`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Globe className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate font-medium">{site.name}</span>
+                        <span className="text-[10px] text-muted-foreground truncate hidden sm:block">{site.url}</span>
+                      </div>
+                      <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${isSelected ? "border-primary bg-primary" : "border-muted-foreground"}`}>
+                        {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {sites.length === 0 && !sitesQuery.isLoading && (
+              <p className="text-xs text-muted-foreground italic text-center py-3">
+                No sites saved yet. Add sites in the Sites tab first.
+              </p>
+            )}
+
+            <div className="rounded-md bg-muted/50 border border-dashed p-3 text-xs text-muted-foreground">
+              {applyToAll ? (
+                <span><strong className="text-foreground">All Sites</strong> — proxy will be used for every agent form submission across all your sites.</span>
+              ) : (config.proxySiteIds ?? []).length === 0 ? (
+                <span className="text-destructive/70">No sites selected — proxy will <strong>not</strong> be applied to any submission until you select sites or switch to All Sites.</span>
+              ) : (
+                <span><strong className="text-foreground">{(config.proxySiteIds ?? []).length} site{(config.proxySiteIds ?? []).length !== 1 ? "s" : ""} selected</strong> — proxy only applies to these sites.</span>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
 

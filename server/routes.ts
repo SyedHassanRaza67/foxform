@@ -324,17 +324,21 @@ export async function registerRoutes(
 
   app.put("/api/proxy", authMiddleware, requireRole("user"), async (req, res) => {
     try {
-      const parsed = proxyConfigSchema.safeParse(req.body);
+      const bodySchema = proxyConfigSchema.extend({
+        proxySiteIds: z.array(z.string()).nullable().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ message: "Invalid proxy configuration" });
       }
 
-      const updated = await storage.updateUser(req.user!.userId, {
+      await storage.updateUser(req.user!.userId, {
         proxyHost: parsed.data.proxyHost,
         proxyPort: parsed.data.proxyPort,
         proxyUsername: parsed.data.proxyUsername,
         proxyPassword: parsed.data.proxyPassword,
         proxyType: parsed.data.proxyType,
+        proxySiteIds: parsed.data.proxySiteIds !== undefined ? parsed.data.proxySiteIds : null,
       });
 
       return res.json({ success: true });
@@ -353,6 +357,7 @@ export async function registerRoutes(
         proxyUsername: user.proxyUsername || "",
         proxyPassword: user.proxyPassword || "",
         proxyType: user.proxyType || "http",
+        proxySiteIds: user.proxySiteIds ?? null,
       });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -457,18 +462,25 @@ export async function registerRoutes(
       if (agent.parentUserId) {
         const parentUser = await storage.getUser(agent.parentUserId);
         if (parentUser && parentUser.proxyHost && parentUser.proxyPort && parentUser.proxyUsername && parentUser.proxyPassword) {
-          const geo = extractGeoTarget(formData);
-          geoUsername = buildGeoProxyUsername(parentUser.proxyUsername, geo);
-          proxyHost = parentUser.proxyHost;
-          proxyPort = parentUser.proxyPort;
-          proxyLocation = geo.type ? `${geo.type}-${geo.value}` : null;
-          browserProxy = {
-            host: parentUser.proxyHost,
-            port: parentUser.proxyPort,
-            username: geoUsername,
-            password: parentUser.proxyPassword,
-            protocol: parentUser.proxyType || "http",
-          };
+          // Check proxy site assignment: null = all sites, array = specific sites
+          const proxyAppliesToSite =
+            parentUser.proxySiteIds === null ||
+            (Array.isArray(parentUser.proxySiteIds) && parentUser.proxySiteIds.includes(siteId));
+
+          if (proxyAppliesToSite) {
+            const geo = extractGeoTarget(formData);
+            geoUsername = buildGeoProxyUsername(parentUser.proxyUsername, geo);
+            proxyHost = parentUser.proxyHost;
+            proxyPort = parentUser.proxyPort;
+            proxyLocation = geo.type ? `${geo.type}-${geo.value}` : null;
+            browserProxy = {
+              host: parentUser.proxyHost,
+              port: parentUser.proxyPort,
+              username: geoUsername,
+              password: parentUser.proxyPassword,
+              protocol: parentUser.proxyType || "http",
+            };
+          }
         }
       }
 
