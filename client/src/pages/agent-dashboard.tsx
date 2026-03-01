@@ -426,13 +426,15 @@ export default function AgentDashboard() {
                       {Math.round((p.timestamp - progressUpdates[0].timestamp) / 1000)}s
                     </span>
                     <span className={
-                      p.step === "error" || p.step === "field_warning" || p.step === "submit_warning"
+                      p.step === "error"
                         ? "text-destructive"
+                        : p.step === "field_warning" || p.step === "submit_warning"
+                        ? "text-amber-400"
                         : p.step === "complete"
                         ? "text-emerald-500"
                         : "text-foreground"
                     }>
-                      {p.detail}
+                      {p.step === "field_warning" ? "⚠ " : ""}{p.detail}
                     </span>
                   </div>
                 ))}
