@@ -321,9 +321,13 @@ function getRadioGroupLabel($: cheerio.CheerioAPI, $firstRadio: cheerio.Cheerio<
 
 // ─── Selector building ────────────────────────────────────────────────────────
 
+function cssEscape(value: string): string {
+  return value.replace(/([^\w-])/g, "\\$1");
+}
+
 function buildSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
   const id = $el.attr("id");
-  if (id) return `#${CSS.escape ? CSS.escape(id) : id}`;
+  if (id) return `#${cssEscape(id)}`;
 
   const name = $el.attr("name");
   const tag = $el.prop("tagName")?.toLowerCase() || "input";
