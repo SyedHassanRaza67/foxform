@@ -15,18 +15,19 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft, Users, Globe, Network, FileText
-} from "lucide-react";
+import { Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft } from "lucide-react";
+import { Users } from "lucide-react";
+import { Globe } from "lucide-react";
+import { Network } from "lucide-react";
+import { FileText } from "lucide-react";
 import { useEffect } from "react";
 
 export function AppSidebar() {
   const { user, logout } = useAuth();
   const [location] = useLocation();
-  const { state, setOpen, setOpenMobile, open } = useSidebar();
+  const { state, setOpen, open } = useSidebar();
 
   useEffect(() => {
-    // Hide sidebar by default on load
     setOpen(false);
   }, []);
 
@@ -64,10 +65,10 @@ export function AppSidebar() {
             </div>
           )}
         </div>
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          className="h-8 w-8 ml-auto" 
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 ml-auto"
           onClick={() => setOpen(!open)}
         >
           {state === "expanded" ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}

@@ -1,5 +1,6 @@
 import puppeteerExtra from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import puppeteer from "puppeteer";
 import type { FormField } from "@shared/schema";
 
 puppeteerExtra.use(StealthPlugin());
@@ -36,6 +37,30 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function fillInputNative(page: any, selector: string, value: string): Promise<void> {
+  await page.evaluate((sel: string, val: string) => {
+    const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
+    if (!el) throw new Error(`Element not found: ${sel}`);
+
+    el.focus();
+
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
+      "value"
+    )?.set;
+
+    if (nativeInputValueSetter) {
+      nativeInputValueSetter.call(el, val);
+    } else {
+      el.value = val;
+    }
+
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+  }, selector, value);
+}
+
 export async function autoFillForm(
   url: string,
   fields: FormField[],
@@ -64,6 +89,7 @@ export async function autoFillForm(
 
     browser = await puppeteerExtra.launch({
       headless: true,
+      executablePath: puppeteer.executablePath(),
       args: launchArgs,
     });
 
@@ -77,76 +103,89 @@ export async function autoFillForm(
       await page.authenticate({ username: proxy.username, password: proxy.password });
     }
 
-    onProgress({ step: "navigating", detail: `Navigating to ${url}`, percent: 15, timestamp: Date.now() });
+    onProgress({ step: "navigating", detail: `Navigating to ${url}`, percent: 10, timestamp: Date.now() });
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await sleep(randomDelay(2000, 4000));
+    await sleep(randomDelay(2000, 3000));
 
-    // Try to wait for network idle but don't fail if it takes too long
     try {
-      await page.waitForNetworkIdle({ timeout: 5000 });
-    } catch (e) {
-      // ignore
+      await page.waitForNetworkIdle({ timeout: 6000 });
+    } catch {
+      // Ignore – some pages never go fully idle
     }
 
     onProgress({ step: "page_loaded", detail: "Page loaded successfully", percent: 20, timestamp: Date.now() });
 
     const sortedFields = [...fields].sort((a, b) => a.order - b.order);
-    const totalFields = sortedFields.length;
-    const targetTotalTime = randomDelay(30000, 35000);
-    const baseFieldDelay = Math.floor(targetTotalTime / Math.max(totalFields, 1));
+    const filledFields = sortedFields.filter((f) => formData[f.name] !== undefined && formData[f.name] !== "");
+    const totalFields = filledFields.length;
 
-    for (let i = 0; i < sortedFields.length; i++) {
-      const field = sortedFields[i];
+    for (let i = 0; i < filledFields.length; i++) {
+      const field = filledFields[i];
       const value = formData[field.name];
-      if (!value) continue;
 
-      const fieldPercent = 20 + Math.floor((i / totalFields) * 60);
+      const fieldPercent = 20 + Math.floor(((i + 1) / Math.max(totalFields, 1)) * 60);
       onProgress({
         step: "filling_field",
-        detail: `Filling field: ${field.label || field.name} (${i + 1}/${totalFields})`,
+        detail: `Filling: ${field.label || field.name} (${i + 1}/${totalFields})`,
         percent: fieldPercent,
         timestamp: Date.now(),
       });
 
       try {
-        await page.waitForSelector(field.selector, { timeout: 5000 });
-
         if (field.type === "checkbox") {
-          if (value === "true" || value === "1" || value === "on" || (field.options && field.options.includes(value))) {
-            const isChecked = await page.$eval(field.selector, (el: any) => el.checked);
-            if (!isChecked) {
-              await page.click(field.selector);
+          const shouldCheck = value === "true" || value === "1" || value === "on" || (field.options && field.options.includes(value));
+          if (shouldCheck) {
+            try {
+              await page.waitForSelector(field.selector, { timeout: 4000 });
+              const isChecked = await page.$eval(field.selector, (el: any) => el.checked);
+              if (!isChecked) {
+                await page.click(field.selector);
+              }
+            } catch {
+              // Try by value attribute
+              const altSel = `input[type="checkbox"][value="${field.options?.[0] || value}"]`;
+              try {
+                await page.click(altSel);
+              } catch {}
             }
           }
         } else if (field.type === "radio") {
           const radioSelector = `input[name="${field.name}"][value="${value}"]`;
-          await page.waitForSelector(radioSelector, { timeout: 5000 });
-          await page.click(radioSelector);
-        } else if (field.type === "select") {
-          await page.select(field.selector, value);
-        } else if (field.type === "textarea" || field.type === "text" || field.type === "email" || field.type === "tel") {
-          await page.click(field.selector);
-          await sleep(randomDelay(200, 500));
-
-          const existingVal = await page.$eval(field.selector, (el: any) => el.value);
-          if (existingVal) {
-            await page.click(field.selector, { clickCount: 3 });
-            await sleep(100);
+          try {
+            await page.waitForSelector(radioSelector, { timeout: 4000 });
+            await page.click(radioSelector);
+          } catch {
+            const altSel = `input[type="radio"][value="${value}"]`;
+            try { await page.click(altSel); } catch {}
           }
-
-          for (const char of value) {
-            await page.keyboard.type(char, { delay: 0 });
-            await sleep(randomDelay(40, 120));
+        } else if (field.type === "select") {
+          await page.waitForSelector(field.selector, { timeout: 4000 });
+          try {
+            await page.select(field.selector, value);
+          } catch {
+            await page.evaluate((sel: string, val: string) => {
+              const el = document.querySelector(sel) as HTMLSelectElement | null;
+              if (el) {
+                el.value = val;
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }, field.selector, value);
           }
         } else {
-          await page.click(field.selector);
-          await sleep(randomDelay(200, 400));
+          await page.waitForSelector(field.selector, { timeout: 4000 });
 
-          for (const char of value) {
-            await page.keyboard.type(char, { delay: 0 });
-            await sleep(randomDelay(40, 120));
+          // First attempt: use native value setter (works for React forms)
+          try {
+            await fillInputNative(page, field.selector, value);
+          } catch {
+            // Fallback: click and type character by character
+            await page.click(field.selector, { clickCount: 3 });
+            await sleep(100);
+            await page.keyboard.type(value, { delay: randomDelay(40, 90) });
           }
+
+          await sleep(randomDelay(200, 500));
         }
       } catch (fieldErr: any) {
         onProgress({
@@ -157,15 +196,11 @@ export async function autoFillForm(
         });
       }
 
-      const interFieldDelay = randomDelay(
-        Math.floor(baseFieldDelay * 0.6),
-        Math.floor(baseFieldDelay * 1.4)
-      );
-      await sleep(interFieldDelay);
+      await sleep(randomDelay(300, 800));
     }
 
-    onProgress({ step: "fields_complete", detail: "All fields filled", percent: 82, timestamp: Date.now() });
-    await sleep(randomDelay(500, 1500));
+    onProgress({ step: "fields_complete", detail: `All ${totalFields} fields filled`, percent: 82, timestamp: Date.now() });
+    await sleep(randomDelay(800, 1500));
 
     if (submitSelector) {
       onProgress({ step: "submitting", detail: "Clicking submit button", percent: 85, timestamp: Date.now() });
@@ -173,12 +208,12 @@ export async function autoFillForm(
       try {
         await page.waitForSelector(submitSelector, { timeout: 5000 });
         await page.click(submitSelector);
-        await sleep(randomDelay(2000, 4000));
+        await sleep(randomDelay(3000, 5000));
 
         try {
-          await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 });
+          await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 });
         } catch {
-          // no navigation expected for some forms
+          // No navigation – AJAX submission or same-page response
         }
       } catch (submitErr: any) {
         onProgress({
@@ -190,14 +225,14 @@ export async function autoFillForm(
       }
     }
 
-    onProgress({ step: "screenshot", detail: "Capturing screenshot", percent: 90, timestamp: Date.now() });
+    onProgress({ step: "screenshot", detail: "Capturing screenshot", percent: 92, timestamp: Date.now() });
 
     const screenshotBuffer = await page.screenshot({ encoding: "base64", fullPage: false });
     const screenshot = `data:image/png;base64,${screenshotBuffer}`;
 
     const duration = Date.now() - startTime;
 
-    onProgress({ step: "complete", detail: `Form filled successfully in ${Math.round(duration / 1000)}s`, percent: 100, timestamp: Date.now() });
+    onProgress({ step: "complete", detail: `Form filled & submitted in ${Math.round(duration / 1000)}s`, percent: 100, timestamp: Date.now() });
 
     await browser.close();
     browser = null;

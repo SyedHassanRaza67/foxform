@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Progress } from "@/components/ui/progress";
 import {
   Globe, Star, Send, Loader2, FileText, Clock, MapPin, Shield,
-  Monitor, Camera, CheckCircle2, XCircle, Timer, Eye, EyeOff
+  Monitor, Camera, CheckCircle2, XCircle, Timer, Eye, EyeOff, ChevronRight
 } from "lucide-react";
 import type { FormField, Site, Submission } from "@shared/schema";
 
@@ -38,6 +38,7 @@ export default function AgentDashboard() {
   const [progressUpdates, setProgressUpdates] = useState<AutoFillProgress[]>([]);
   const [currentProgress, setCurrentProgress] = useState<AutoFillProgress | null>(null);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [showProgressDialog, setShowProgressDialog] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const progressContainerRef = useRef<HTMLDivElement>(null);
 
@@ -109,18 +110,27 @@ export default function AgentDashboard() {
       setActiveSubmissionId(data.id);
       setProgressUpdates([]);
       setCurrentProgress(null);
-      setFormData({});
+      setShowProgressDialog(true);
       connectSSE(data.id);
 
-      const locationMsg = data.proxyLocation
-        ? ` | Geo: ${data.proxyLocation}`
-        : "";
+      const locationMsg = data.proxyLocation ? ` via ${data.proxyLocation}` : "";
       toast({ title: `Submission started${locationMsg}` });
     },
     onError: (err: any) => {
+      setShowProgressDialog(false);
       toast({ title: "Submission failed", description: err.message, variant: "destructive" });
     },
   });
+
+  // True from click → until step is complete/error
+  const isBusy =
+    submitMutation.isPending ||
+    (!!activeSubmissionId &&
+      currentProgress?.step !== "complete" &&
+      currentProgress?.step !== "error");
+
+  const isDone =
+    currentProgress?.step === "complete" || currentProgress?.step === "error";
 
   const isZipField = (name: string) => ZIP_FIELDS.includes(name.toLowerCase());
   const isStateField = (name: string) => STATE_FIELDS.includes(name.toLowerCase());
@@ -142,9 +152,6 @@ export default function AgentDashboard() {
     return null;
   }, [formData]);
 
-  const hasGeoFields = expandedFields.some((f) => isGeoField(f.name));
-  const isRunning = activeSubmissionId && currentProgress && currentProgress.step !== "complete" && currentProgress.step !== "error";
-
   const handleToggleSite = (siteId: string) => {
     if (expandedSiteId === siteId) {
       setExpandedSiteId(null);
@@ -154,6 +161,19 @@ export default function AgentDashboard() {
       setFormData({});
     }
   };
+
+  const handleCloseProgress = () => {
+    if (!isBusy) {
+      setShowProgressDialog(false);
+      setActiveSubmissionId(null);
+      setProgressUpdates([]);
+      setCurrentProgress(null);
+    }
+  };
+
+  const progressPercent = submitMutation.isPending
+    ? 3
+    : currentProgress?.percent ?? 0;
 
   if (sitesQuery.isLoading) {
     return (
@@ -330,32 +350,24 @@ export default function AgentDashboard() {
                           </div>
                         ) : (
                           <p className="text-[10px] text-muted-foreground italic">
-                            Enter a zip code or state value to activate geo-targeting
+                            Enter a zip or state to activate geo-targeting
                           </p>
                         )}
                       </div>
                     )}
 
                     <Button
-                      className="w-full h-9 text-xs font-semibold relative overflow-hidden"
+                      className="w-full h-9 text-xs font-semibold"
                       onClick={() => submitMutation.mutate()}
-                      disabled={submitMutation.isPending || !!isRunning}
+                      disabled={submitMutation.isPending || isBusy}
                       data-testid="button-submit-form"
                     >
-                      {isRunning && (
-                        <div 
-                          className="absolute inset-0 bg-primary/20 transition-all duration-500 ease-out" 
-                          style={{ width: `${currentProgress?.percent || 0}%` }}
-                        />
+                      {submitMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5 mr-2" />
                       )}
-                      <span className="relative z-10 flex items-center justify-center">
-                        {submitMutation.isPending || isRunning ? (
-                          <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                        ) : (
-                          <Send className="w-3.5 h-3.5 mr-2" />
-                        )}
-                        {isRunning ? `Auto-Filling (${currentProgress?.percent || 0}%)` : "Submit & Auto-Fill"}
-                      </span>
+                      Submit & Auto-Fill
                     </Button>
                   </div>
                 )}
@@ -365,45 +377,6 @@ export default function AgentDashboard() {
         })}
       </div>
 
-      {activeSubmissionId && progressUpdates.length > 0 && (
-        <Card data-testid="card-autofill-progress">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Monitor className="w-4 h-4" />
-              Auto-Fill Progress
-              {isRunning && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
-              {currentProgress?.step === "complete" && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-              {currentProgress?.step === "error" && <XCircle className="w-4 h-4 text-destructive" />}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Progress value={currentProgress?.percent || 0} className="h-2" data-testid="progress-autofill" />
-            <p className="text-sm font-medium" data-testid="text-progress-detail">
-              {currentProgress?.detail || "Initializing..."}
-            </p>
-
-            <div ref={progressContainerRef} className="max-h-48 overflow-y-auto rounded-md bg-muted p-3 space-y-1">
-              {progressUpdates.map((p, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs">
-                  <span className="text-muted-foreground font-mono shrink-0 w-12">
-                    {Math.round((p.timestamp - progressUpdates[0].timestamp) / 1000)}s
-                  </span>
-                  <span className={
-                    p.step === "error" || p.step === "field_warning" || p.step === "submit_warning"
-                      ? "text-destructive"
-                      : p.step === "complete"
-                      ? "text-emerald-500"
-                      : "text-foreground"
-                  }>
-                    {p.detail}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {submissionsQuery.data && submissionsQuery.data.length > 0 && (
         <div className="mt-8">
           <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">Recent Submissions</h3>
@@ -412,7 +385,7 @@ export default function AgentDashboard() {
               <table className="w-full text-xs text-left border-collapse">
                 <thead>
                   <tr className="bg-muted/50 border-b">
-                    <th className="p-2 font-medium border-r">Date & Time</th>
+                    <th className="p-2 font-medium border-r">Date &amp; Time</th>
                     <th className="p-2 font-medium border-r">Proxy Location</th>
                     <th className="p-2 font-medium border-r">Host</th>
                     <th className="p-2 font-medium border-r">Duration</th>
@@ -424,7 +397,7 @@ export default function AgentDashboard() {
                   {submissionsQuery.data.slice(0, 15).map((sub) => (
                     <tr key={sub.id} className="border-b hover:bg-muted/30 transition-colors" data-testid={`row-submission-${sub.id}`}>
                       <td className="p-2 border-r whitespace-nowrap">
-                        {sub.createdAt ? new Date(sub.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : "Unknown"}
+                        {sub.createdAt ? new Date(sub.createdAt).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "Unknown"}
                       </td>
                       <td className="p-2 border-r whitespace-nowrap">
                         {sub.proxyLocation ? (
@@ -483,6 +456,84 @@ export default function AgentDashboard() {
         </div>
       )}
 
+      {/* Auto-fill progress dialog */}
+      <Dialog open={showProgressDialog} onOpenChange={handleCloseProgress}>
+        <DialogContent className="max-w-lg" data-testid="dialog-autofill-progress">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Monitor className="w-5 h-5" />
+              Auto-Fill Progress
+              {isBusy && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
+              {currentProgress?.step === "complete" && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+              {currentProgress?.step === "error" && <XCircle className="w-4 h-4 text-destructive" />}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span data-testid="text-progress-detail">
+                  {submitMutation.isPending
+                    ? "Creating submission..."
+                    : currentProgress?.detail || "Starting browser..."}
+                </span>
+                <span className="font-mono font-semibold tabular-nums" data-testid="text-progress-percent">
+                  {progressPercent}%
+                </span>
+              </div>
+              <Progress value={progressPercent} className="h-2.5" data-testid="progress-autofill" />
+            </div>
+
+            {progressUpdates.length > 0 && (
+              <div
+                ref={progressContainerRef}
+                className="max-h-56 overflow-y-auto rounded-md bg-muted p-3 space-y-1 text-[11px] font-mono"
+              >
+                {progressUpdates.map((p, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-muted-foreground shrink-0 w-10 tabular-nums">
+                      {Math.round((p.timestamp - progressUpdates[0].timestamp) / 1000)}s
+                    </span>
+                    <span className={
+                      p.step === "error" || p.step === "field_warning" || p.step === "submit_warning"
+                        ? "text-destructive"
+                        : p.step === "complete"
+                        ? "text-emerald-500"
+                        : "text-foreground"
+                    }>
+                      {p.detail}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {isBusy && progressUpdates.length === 0 && (
+              <div className="flex items-center justify-center gap-3 py-4 text-muted-foreground text-sm">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Launching browser & navigating to page...</span>
+              </div>
+            )}
+
+            {isDone && (
+              <Button
+                className="w-full"
+                variant={currentProgress?.step === "complete" ? "default" : "destructive"}
+                onClick={handleCloseProgress}
+                data-testid="button-close-progress"
+              >
+                {currentProgress?.step === "complete" ? (
+                  <><CheckCircle2 className="w-4 h-4 mr-2" />Done</>
+                ) : (
+                  <><XCircle className="w-4 h-4 mr-2" />Close</>
+                )}
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Screenshot viewer */}
       <Dialog open={!!screenshotUrl} onOpenChange={() => setScreenshotUrl(null)}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
