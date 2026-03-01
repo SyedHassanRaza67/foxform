@@ -114,6 +114,17 @@ export async function autoFillForm(
       // Ignore – some pages never go fully idle
     }
 
+    // Verify we actually landed on the target site (proxy auth failure sends browser elsewhere)
+    const landedUrl = page.url();
+    const targetHost = new URL(url).hostname;
+    const landedHost = (() => { try { return new URL(landedUrl).hostname; } catch { return ""; } })();
+    if (landedHost && landedHost !== targetHost) {
+      throw new Error(
+        `Proxy authentication failed — browser landed on "${landedHost}" instead of "${targetHost}". ` +
+        `Check your proxy URL template: the username format may be incorrect for your proxy provider.`
+      );
+    }
+
     onProgress({ step: "page_loaded", detail: "Page loaded successfully", percent: 20, timestamp: Date.now() });
 
     const sortedFields = [...fields].sort((a, b) => a.order - b.order);
@@ -122,14 +133,21 @@ export async function autoFillForm(
     );
     const totalFields = filledFields.length;
 
-    // Wait for the first text field to appear — ensures the form is ready before filling
+    // Wait for the first text field to appear — ensures the form is fully loaded before filling
     const firstTextField = filledFields.find((f) => f.type !== "checkbox" && f.type !== "radio" && f.selector);
     if (firstTextField) {
       try {
         await page.waitForSelector(firstTextField.selector, { timeout: 15000 });
         onProgress({ step: "form_ready", detail: "Form detected and ready to fill", percent: 22, timestamp: Date.now() });
       } catch {
-        onProgress({ step: "field_warning", detail: "Form took too long to appear — attempting to fill anyway", percent: 22, timestamp: Date.now() });
+        // Form didn't appear — likely the page is blocked, CAPTCHA, or proxy issue
+        const pageTitle = await page.title().catch(() => "");
+        const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 200) || "").catch(() => "");
+        throw new Error(
+          `Form not found on page after 15 seconds. Page title: "${pageTitle}". ` +
+          (pageText ? `Page content: "${pageText.replace(/\n/g, " ")}"` : "") +
+          ` This may be a Cloudflare block or the form selector is wrong.`
+        );
       }
     }
 
