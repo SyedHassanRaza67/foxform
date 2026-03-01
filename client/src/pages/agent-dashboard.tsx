@@ -14,10 +14,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import {
-  Globe, Star, Send, Loader2, FileText, Clock, MapPin, Shield,
-  Monitor, Camera, CheckCircle2, XCircle, Timer, Eye, EyeOff, ChevronRight
+  Globe, Star, Send, Loader2, MapPin, Shield,
+  Monitor, CheckCircle2, XCircle, Eye, EyeOff
 } from "lucide-react";
-import type { FormField, Site, Submission } from "@shared/schema";
+import type { FormField, Site } from "@shared/schema";
 
 const ZIP_FIELDS = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_FIELDS = ["state", "state_name"];
@@ -37,14 +37,11 @@ export default function AgentDashboard() {
   const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
   const [progressUpdates, setProgressUpdates] = useState<AutoFillProgress[]>([]);
   const [currentProgress, setCurrentProgress] = useState<AutoFillProgress | null>(null);
-  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [showProgressDialog, setShowProgressDialog] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const progressContainerRef = useRef<HTMLDivElement>(null);
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/agent/sites"] });
-  const submissionsQuery = useQuery<Submission[]>({ queryKey: ["/api/agent/submissions"] });
-
   const connectSSE = useCallback((submissionId: string) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -377,85 +374,6 @@ export default function AgentDashboard() {
         })}
       </div>
 
-      {submissionsQuery.data && submissionsQuery.data.length > 0 && (
-        <div className="mt-8">
-          <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">Recent Submissions</h3>
-          <div className="rounded-md border bg-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="bg-muted/50 border-b">
-                    <th className="p-2 font-medium border-r">Date &amp; Time</th>
-                    <th className="p-2 font-medium border-r">Proxy Location</th>
-                    <th className="p-2 font-medium border-r">Host</th>
-                    <th className="p-2 font-medium border-r">Duration</th>
-                    <th className="p-2 font-medium border-r">Status</th>
-                    <th className="p-2 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {submissionsQuery.data.slice(0, 15).map((sub) => (
-                    <tr key={sub.id} className="border-b hover:bg-muted/30 transition-colors" data-testid={`row-submission-${sub.id}`}>
-                      <td className="p-2 border-r whitespace-nowrap">
-                        {sub.createdAt ? new Date(sub.createdAt).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "Unknown"}
-                      </td>
-                      <td className="p-2 border-r whitespace-nowrap">
-                        {sub.proxyLocation ? (
-                          <span className="flex items-center gap-1 text-primary font-mono" data-testid={`text-proxy-location-${sub.id}`}>
-                            <MapPin className="w-3 h-3" />
-                            {sub.proxyLocation}
-                          </span>
-                        ) : "-"}
-                      </td>
-                      <td className="p-2 border-r whitespace-nowrap text-muted-foreground">
-                        {sub.proxyHost || "-"}
-                      </td>
-                      <td className="p-2 border-r whitespace-nowrap">
-                        {sub.duration ? (
-                          <span className="flex items-center gap-1">
-                            <Timer className="w-3 h-3" />
-                            {(sub.duration / 1000).toFixed(1)}s
-                          </span>
-                        ) : "-"}
-                      </td>
-                      <td className="p-2 border-r whitespace-nowrap">
-                        <Badge variant={
-                          sub.status === "success" ? "default"
-                            : sub.status === "failed" ? "destructive"
-                            : "secondary"
-                        } className="px-1 py-0 h-5 text-[10px]">
-                          {sub.status === "running" && <Loader2 className="w-2.5 h-2.5 mr-1 animate-spin" />}
-                          {sub.status}
-                        </Badge>
-                      </td>
-                      <td className="p-2 whitespace-nowrap">
-                        {sub.screenshot && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-[10px]"
-                            onClick={() => setScreenshotUrl(sub.screenshot)}
-                            data-testid={`button-screenshot-${sub.id}`}
-                          >
-                            <Camera className="w-3 h-3 mr-1" />
-                            View
-                          </Button>
-                        )}
-                        {sub.errorMessage && (
-                          <span className="ml-2 text-destructive cursor-help" title={sub.errorMessage}>
-                            <XCircle className="w-3 h-3 inline" />
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Auto-fill progress dialog */}
       <Dialog open={showProgressDialog} onOpenChange={handleCloseProgress}>
         <DialogContent className="max-w-lg" data-testid="dialog-autofill-progress">
@@ -533,22 +451,6 @@ export default function AgentDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* Screenshot viewer */}
-      <Dialog open={!!screenshotUrl} onOpenChange={() => setScreenshotUrl(null)}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>Submission Screenshot</DialogTitle>
-          </DialogHeader>
-          {screenshotUrl && (
-            <img
-              src={screenshotUrl}
-              alt="Form submission screenshot"
-              className="w-full rounded-md border"
-              data-testid="img-screenshot"
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
