@@ -19,8 +19,10 @@ import {
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
 
-const ZIP_FIELDS = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
-const STATE_FIELDS = ["state", "state_name"];
+const ZIP_KEYWORDS = ["zip", "postal"];
+const STATE_KEYWORDS = ["state"];
+const ZIP_EXACT = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
+const STATE_EXACT = ["state", "state_name"];
 
 interface AutoFillProgress {
   step: string;
@@ -129,8 +131,14 @@ export default function AgentDashboard() {
   const isDone =
     currentProgress?.step === "complete" || currentProgress?.step === "error";
 
-  const isZipField = (name: string) => ZIP_FIELDS.includes(name.toLowerCase());
-  const isStateField = (name: string) => STATE_FIELDS.includes(name.toLowerCase());
+  const isZipField = (name: string) => {
+    const k = name.toLowerCase();
+    return ZIP_EXACT.includes(k) || ZIP_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"));
+  };
+  const isStateField = (name: string) => {
+    const k = name.toLowerCase();
+    return STATE_EXACT.includes(k) || STATE_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"));
+  };
   const isGeoField = (name: string) => isZipField(name) || isStateField(name);
 
   const expandedFields = expandedSite ? ((expandedSite.fields as FormField[]) || []) : [];
@@ -337,12 +345,17 @@ export default function AgentDashboard() {
                           <p className="text-[9px] font-bold uppercase tracking-widest text-primary">Geo-Targeting Preview</p>
                         </div>
                         {geoPreview ? (
-                          <div className="flex items-center justify-between gap-4">
-                            <p className="font-mono text-[11px] text-primary truncate" data-testid="text-proxy-preview">
-                              {user?.proxyUsername}-zip-{geoPreview.value}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground whitespace-nowrap">
-                              via <span className="font-mono">{geoPreview.field}</span>
+                          <div className="space-y-0.5">
+                            <div className="flex items-center justify-between gap-4">
+                              <p className="font-mono text-[11px] text-primary truncate" data-testid="text-proxy-preview">
+                                [proxy-user]-{geoPreview.type}-{geoPreview.value}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                via <span className="font-mono">{geoPreview.field}</span>
+                              </p>
+                            </div>
+                            <p className="text-[9px] text-emerald-500 font-semibold uppercase tracking-wider">
+                              ✓ Geo-targeting active — {geoPreview.type === "zip" ? "zip" : "state"} will route proxy IP
                             </p>
                           </div>
                         ) : (

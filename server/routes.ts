@@ -28,15 +28,36 @@ function sendSSE(submissionId: string, data: AutoFillProgress) {
 
 const ZIP_FIELD_NAMES = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_FIELD_NAMES = ["state", "state_name"];
+// Keywords that a field name must start with (before a separator) to count as a zip/state field
+const ZIP_KEYWORDS = ["zip", "postal"];
+const STATE_KEYWORDS = ["state"];
+
+function matchesZipField(key: string): boolean {
+  const k = key.toLowerCase();
+  if (ZIP_FIELD_NAMES.includes(k)) return true;
+  return ZIP_KEYWORDS.some(
+    (kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_") || k.startsWith(kw + " ")
+  );
+}
+
+function matchesStateField(key: string): boolean {
+  const k = key.toLowerCase();
+  if (STATE_FIELD_NAMES.includes(k)) return true;
+  return STATE_KEYWORDS.some(
+    (kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_") || k.startsWith(kw + " ")
+  );
+}
 
 function extractGeoTarget(formData: Record<string, string>): { type: "zip" | "state" | null; value: string } {
+  // Zip has first priority
   for (const key of Object.keys(formData)) {
-    if (ZIP_FIELD_NAMES.includes(key.toLowerCase()) && formData[key]?.trim()) {
+    if (matchesZipField(key) && formData[key]?.trim()) {
       return { type: "zip", value: formData[key].trim() };
     }
   }
+  // State is second priority
   for (const key of Object.keys(formData)) {
-    if (STATE_FIELD_NAMES.includes(key.toLowerCase()) && formData[key]?.trim()) {
+    if (matchesStateField(key) && formData[key]?.trim()) {
       return { type: "state", value: formData[key].trim().toLowerCase().replace(/\s+/g, "_") };
     }
   }
