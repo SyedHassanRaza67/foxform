@@ -12,6 +12,11 @@ import { autoFillForm, type AutoFillProgress, type ProxyConfig as BrowserProxyCo
 
 const sseClients = new Map<string, import("express").Response[]>();
 
+function normalizeProxyHost(host: string): string {
+  const stripped = host.trim().replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "").split("/")[0].trim();
+  return stripped.replace(/:\d+$/, "");
+}
+
 function sendSSE(submissionId: string, data: AutoFillProgress) {
   const clients = sseClients.get(submissionId) || [];
   const msg = `data: ${JSON.stringify(data)}\n\n`;
@@ -354,7 +359,7 @@ export async function registerRoutes(
       }
 
       await storage.updateUser(req.user!.userId, {
-        proxyHost: parsed.data.proxyHost,
+        proxyHost: normalizeProxyHost(parsed.data.proxyHost),
         proxyPort: parsed.data.proxyPort,
         proxyUsername: parsed.data.proxyUsername,
         proxyPassword: parsed.data.proxyPassword,
@@ -373,7 +378,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.user!.userId);
       if (!user) return res.status(404).json({ message: "User not found" });
       return res.json({
-        proxyHost: user.proxyHost || "",
+        proxyHost: user.proxyHost ? normalizeProxyHost(user.proxyHost) : "",
         proxyPort: user.proxyPort || 0,
         proxyUsername: user.proxyUsername || "",
         proxyPassword: user.proxyPassword || "",
@@ -394,7 +399,7 @@ export async function registerRoutes(
 
       const response = await axios.get("https://api.ipify.org?format=json", {
         proxy: {
-          host: user.proxyHost,
+          host: normalizeProxyHost(user.proxyHost),
           port: user.proxyPort,
           auth: {
             username: user.proxyUsername || "",
@@ -491,11 +496,11 @@ export async function registerRoutes(
           if (proxyAppliesToSite) {
             const geo = extractGeoTarget(formData);
             geoUsername = buildGeoProxyUsername(parentUser.proxyUsername, geo);
-            proxyHost = parentUser.proxyHost;
+            proxyHost = normalizeProxyHost(parentUser.proxyHost);
             proxyPort = parentUser.proxyPort;
             proxyLocation = geo.type ? `${geo.type}-${geo.value}` : null;
             browserProxy = {
-              host: parentUser.proxyHost,
+              host: normalizeProxyHost(parentUser.proxyHost),
               port: parentUser.proxyPort,
               username: geoUsername,
               password: parentUser.proxyPassword,
