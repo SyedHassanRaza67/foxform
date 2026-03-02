@@ -75,7 +75,7 @@ export async function autoFillForm(
   let browser: any = null;
 
   try {
-    onProgress({ step: "launching", detail: "Starting headless browser with stealth mode", percent: 5, timestamp: Date.now() });
+    onProgress({ step: "launching", detail: "Launching", percent: 5, timestamp: Date.now() });
 
     const launchArgs = [
       "--no-sandbox",
@@ -119,8 +119,8 @@ export async function autoFillForm(
 
     // Phase 1 — ZIP proxy
     for (let attempt = 1; attempt <= MAX_ZIP_ATTEMPTS; attempt++) {
-      const label = attempt > 1 ? ` (zip retry ${attempt}/${MAX_ZIP_ATTEMPTS})` : "";
-      onProgress({ step: "navigating", detail: `Navigating to ${url}${label}`, percent: 10, timestamp: Date.now() });
+      const label = attempt > 1 ? ` (retry ${attempt}/${MAX_ZIP_ATTEMPTS})` : "";
+      onProgress({ step: "navigating", detail: `Navigating${label}`, percent: 10, timestamp: Date.now() });
       try {
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
         lastTunnelErr = null;
@@ -131,7 +131,7 @@ export async function autoFillForm(
             const waitMs = 3000 * attempt;
             onProgress({
               step: "field_warning",
-              detail: `Zip proxy tunnel failed, retrying in ${waitMs / 1000}s... (${attempt}/${MAX_ZIP_ATTEMPTS})`,
+              detail: `Connection failed, retrying in ${waitMs / 1000}s... (${attempt}/${MAX_ZIP_ATTEMPTS})`,
               percent: 12,
               timestamp: Date.now(),
             });
@@ -153,7 +153,7 @@ export async function autoFillForm(
       if (fallbackProxy) {
         onProgress({
           step: "field_warning",
-          detail: `ZIP proxy unavailable (${proxy?.label ?? "zip"}). Switching to state proxy (${fallbackProxy.label ?? "state"})...`,
+          detail: "Switching to alternate connection...",
           percent: 13,
           timestamp: Date.now(),
         });
@@ -162,7 +162,7 @@ export async function autoFillForm(
         for (let attempt = 1; attempt <= 2; attempt++) {
           onProgress({
             step: "navigating",
-            detail: `Navigating via state proxy (${fallbackProxy.label ?? "state"}) — attempt ${attempt}/2`,
+            detail: `Navigating via alternate proxy (${attempt}/2)`,
             percent: 14,
             timestamp: Date.now(),
           });
@@ -204,7 +204,7 @@ export async function autoFillForm(
       );
     }
 
-    onProgress({ step: "page_loaded", detail: "Page loaded successfully", percent: 20, timestamp: Date.now() });
+    onProgress({ step: "page_loaded", detail: "Page loaded", percent: 20, timestamp: Date.now() });
 
     const sortedFields = [...fields].sort((a, b) => a.order - b.order);
     const filledFields = sortedFields.filter(
@@ -217,7 +217,7 @@ export async function autoFillForm(
     if (firstTextField) {
       try {
         await page.waitForSelector(firstTextField.selector, { timeout: 15000 });
-        onProgress({ step: "form_ready", detail: "Form detected and ready to fill", percent: 22, timestamp: Date.now() });
+        onProgress({ step: "form_ready", detail: "Form ready", percent: 22, timestamp: Date.now() });
       } catch {
         // Form didn't appear — likely the page is blocked, CAPTCHA, or proxy issue
         const pageTitle = await page.title().catch(() => "");
@@ -243,7 +243,7 @@ export async function autoFillForm(
       const fieldPercent = 22 + Math.floor(((i + 1) / Math.max(totalFields, 1)) * 58);
       onProgress({
         step: "filling_field",
-        detail: `Filling: ${field.label || field.name} (${i + 1}/${totalFields})`,
+        detail: `Saving (${i + 1}/${totalFields})`,
         percent: fieldPercent,
         timestamp: Date.now(),
       });
@@ -309,7 +309,7 @@ export async function autoFillForm(
         console.warn(`[browser] Could not fill "${label}" (selector: ${field.selector}): ${fieldErr.message}`);
         onProgress({
           step: "field_warning",
-          detail: `Could not fill "${label}": ${fieldErr.message}`,
+          detail: `Could not save field ${i + 1} of ${totalFields}`,
           percent: fieldPercent,
           timestamp: Date.now(),
         });
@@ -318,11 +318,11 @@ export async function autoFillForm(
       await sleep(randomDelay(300, 800));
     }
 
-    onProgress({ step: "fields_complete", detail: `All ${totalFields} fields filled`, percent: 82, timestamp: Date.now() });
+    onProgress({ step: "fields_complete", detail: "All fields saved", percent: 82, timestamp: Date.now() });
     await sleep(randomDelay(800, 1500));
 
     if (submitSelector) {
-      onProgress({ step: "submitting", detail: "Clicking submit button", percent: 85, timestamp: Date.now() });
+      onProgress({ step: "submitting", detail: "Submitting", percent: 85, timestamp: Date.now() });
 
       try {
         await page.waitForSelector(submitSelector, { timeout: 5000 });
@@ -337,21 +337,21 @@ export async function autoFillForm(
       } catch (submitErr: any) {
         onProgress({
           step: "submit_warning",
-          detail: `Submit button issue: ${submitErr.message}`,
+          detail: "Submit issue",
           percent: 87,
           timestamp: Date.now(),
         });
       }
     }
 
-    onProgress({ step: "screenshot", detail: "Capturing screenshot", percent: 92, timestamp: Date.now() });
+    onProgress({ step: "screenshot", detail: "Capturing result", percent: 92, timestamp: Date.now() });
 
     const screenshotBuffer = await page.screenshot({ encoding: "base64", fullPage: false });
     const screenshot = `data:image/png;base64,${screenshotBuffer}`;
 
     const duration = Date.now() - startTime;
 
-    onProgress({ step: "complete", detail: `Form filled & submitted in ${Math.round(duration / 1000)}s`, percent: 100, timestamp: Date.now() });
+    onProgress({ step: "complete", detail: `Completed in ${Math.round(duration / 1000)}s`, percent: 100, timestamp: Date.now() });
 
     await browser.close();
     browser = null;
@@ -362,7 +362,7 @@ export async function autoFillForm(
 
     onProgress({
       step: "error",
-      detail: `Auto-fill failed: ${error.message}`,
+      detail: "Submission failed",
       percent: 100,
       timestamp: Date.now(),
     });

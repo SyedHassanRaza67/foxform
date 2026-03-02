@@ -37,7 +37,7 @@ interface ProxyConfig {
   proxySiteIds: string[] | null;
 }
 
-function SitesTab() {
+export function SitesTab() {
   const { toast } = useToast();
   const [url, setUrl] = useState("");
   const [siteName, setSiteName] = useState("");
@@ -518,7 +518,7 @@ function parseProxyUrl(url: string): Partial<ProxyConfig> | null {
   };
 }
 
-function ProxyTab() {
+export function ProxyTab() {
   const { toast } = useToast();
 
   const proxyQuery = useQuery<ProxyConfig>({ queryKey: ["/api/proxy"] });
@@ -817,35 +817,10 @@ export default function UserDashboard() {
   return (
     <div className="space-y-6" data-testid="user-dashboard">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground text-sm mt-1">Manage your sites, agents, and proxy settings</p>
+        <h1 className="text-2xl font-bold tracking-tight">Agents</h1>
+        <p className="text-muted-foreground text-sm mt-1">Manage your agents and their site assignments</p>
       </div>
-
-      <Tabs defaultValue="sites" className="w-full">
-        <TabsList className="grid w-full grid-cols-3 max-w-md">
-          <TabsTrigger value="sites" data-testid="tab-sites">
-            <FileText className="w-4 h-4 mr-2" />
-            Sites & Forms
-          </TabsTrigger>
-          <TabsTrigger value="agents" data-testid="tab-agents">
-            <Users className="w-4 h-4 mr-2" />
-            Agents
-          </TabsTrigger>
-          <TabsTrigger value="proxy" data-testid="tab-proxy">
-            <Network className="w-4 h-4 mr-2" />
-            Proxy
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="sites" className="mt-6">
-          <SitesTab />
-        </TabsContent>
-        <TabsContent value="agents" className="mt-6">
-          <AgentsTab />
-        </TabsContent>
-        <TabsContent value="proxy" className="mt-6">
-          <ProxyTab />
-        </TabsContent>
-      </Tabs>
+      <AgentsTab />
     </div>
   );
 }

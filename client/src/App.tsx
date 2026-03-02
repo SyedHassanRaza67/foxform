@@ -6,13 +6,37 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { Loader2 } from "lucide-react";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import AdminDashboard from "@/pages/admin-dashboard";
-import UserDashboard from "@/pages/user-dashboard";
+import UserDashboard, { SitesTab, ProxyTab } from "@/pages/user-dashboard";
 import AgentDashboard from "@/pages/agent-dashboard";
-import { Loader2 } from "lucide-react";
+
+function SitesPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Sites & Forms</h1>
+        <p className="text-muted-foreground text-sm mt-1">Scrape and manage the forms your agents will fill</p>
+      </div>
+      <SitesTab />
+    </div>
+  );
+}
+
+function ProxyPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Proxy Settings</h1>
+        <p className="text-muted-foreground text-sm mt-1">Configure geo-targeted proxy routing for form submissions</p>
+      </div>
+      <ProxyTab />
+    </div>
+  );
+}
 
 function DashboardRouter() {
   const { user } = useAuth();
@@ -64,6 +88,8 @@ function AuthenticatedLayout() {
             <div className="max-w-6xl mx-auto">
               <Switch>
                 <Route path="/" component={DashboardRouter} />
+                <Route path="/sites" component={SitesPage} />
+                <Route path="/proxy" component={ProxyPage} />
                 <Route component={NotFound} />
               </Switch>
             </div>
