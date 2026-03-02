@@ -33,6 +33,46 @@ function sendSSE(submissionId: string, data: AutoFillProgress) {
 
 const ZIP_FIELD_NAMES = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_FIELD_NAMES = ["state", "state_name"];
+
+const US_STATE_CODES: Record<string, string> = {
+  alabama: "al", alaska: "ak", arizona: "az", arkansas: "ar", california: "ca",
+  colorado: "co", connecticut: "ct", delaware: "de", florida: "fl", georgia: "ga",
+  hawaii: "hi", idaho: "id", illinois: "il", indiana: "in", iowa: "ia",
+  kansas: "ks", kentucky: "ky", louisiana: "la", maine: "me", maryland: "md",
+  massachusetts: "ma", michigan: "mi", minnesota: "mn", mississippi: "ms", missouri: "mo",
+  montana: "mt", nebraska: "ne", nevada: "nv", new_hampshire: "nh", new_jersey: "nj",
+  new_mexico: "nm", new_york: "ny", north_carolina: "nc", north_dakota: "nd", ohio: "oh",
+  oklahoma: "ok", oregon: "or", pennsylvania: "pa", rhode_island: "ri", south_carolina: "sc",
+  south_dakota: "sd", tennessee: "tn", texas: "tx", utah: "ut", vermont: "vt",
+  virginia: "va", washington: "wa", west_virginia: "wv", wisconsin: "wi", wyoming: "wy",
+};
+
+function lookupStateCode(stateValue: string): string | null {
+  const normalized = stateValue.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z_]/g, "");
+  // Accept a 2-letter input only if it's actually a valid state abbreviation
+  const allCodes = new Set(Object.values(US_STATE_CODES));
+  if (normalized.length === 2 && allCodes.has(normalized)) return normalized;
+  return US_STATE_CODES[normalized] ?? null;
+}
+
+function extractStateValue(formData: Record<string, string>): string | null {
+  for (const key of Object.keys(formData)) {
+    if (matchesStateField(key) && formData[key]?.trim()) {
+      return formData[key].trim();
+    }
+  }
+  return null;
+}
+
+function buildStateFallbackUsername(baseUsername: string, stateCode: string): string {
+  if (baseUsername.includes("zip-{zip}")) {
+    return baseUsername.replace("zip-{zip}", `state-${stateCode}`);
+  }
+  if (baseUsername.includes("{zip}")) {
+    return baseUsername.replace(/\{zip\}/g, stateCode);
+  }
+  return `${baseUsername}-state-${stateCode}`;
+}
 // Keywords that a field name must start with (before a separator) to count as a zip/state field
 const ZIP_KEYWORDS = ["zip", "postal"];
 const STATE_KEYWORDS = ["state"];
@@ -501,6 +541,7 @@ export async function registerRoutes(
       let proxyLocation: string | null = null;
       let geoUsername: string | null = null;
       let browserProxy: BrowserProxyConfig | null = null;
+      let fallbackBrowserProxy: BrowserProxyConfig | null = null;
 
       if (agent.parentUserId) {
         const parentUser = await storage.getUser(agent.parentUserId);
@@ -531,7 +572,25 @@ export async function registerRoutes(
               username: geoUsername,
               password: parentUser.proxyPassword,
               protocol: parentUser.proxyType || "http",
+              label: proxyLocation ?? undefined,
             };
+
+            // Build state-based fallback proxy (used if zip proxy tunnel fails)
+            if (geo.type === "zip") {
+              const rawState = extractStateValue(formData);
+              const stateCode = rawState ? lookupStateCode(rawState) : null;
+              if (stateCode) {
+                const stateUsername = buildStateFallbackUsername(parentUser.proxyUsername, stateCode);
+                fallbackBrowserProxy = {
+                  host: browserProxy.host,
+                  port: browserProxy.port,
+                  username: stateUsername,
+                  password: parentUser.proxyPassword,
+                  protocol: parentUser.proxyType || "http",
+                  label: `state-${stateCode}`,
+                };
+              }
+            }
           }
         }
       }
@@ -559,7 +618,8 @@ export async function registerRoutes(
         formData,
         site.submitSelector,
         browserProxy,
-        (progress) => sendSSE(submission.id, progress)
+        (progress) => sendSSE(submission.id, progress),
+        fallbackBrowserProxy
       ).then(async (result) => {
         await storage.updateSubmission(submission.id, {
           status: result.success ? "success" : "failed",

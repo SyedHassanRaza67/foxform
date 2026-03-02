@@ -11,6 +11,7 @@ export interface ProxyConfig {
   username: string;
   password: string;
   protocol: string;
+  label?: string;
 }
 
 export interface AutoFillProgress {
@@ -67,7 +68,8 @@ export async function autoFillForm(
   formData: Record<string, string>,
   submitSelector: string | null,
   proxy: ProxyConfig | null,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  fallbackProxy: ProxyConfig | null = null
 ): Promise<AutoFillResult> {
   const startTime = Date.now();
   let browser: any = null;
@@ -103,38 +105,84 @@ export async function autoFillForm(
       await page.authenticate({ username: proxy.username, password: proxy.password });
     }
 
-    // Navigate with automatic retry for transient proxy tunnel failures
-    const MAX_NAV_ATTEMPTS = 3;
-    let navAttempt = 0;
-    while (true) {
-      navAttempt++;
-      const attemptLabel = navAttempt > 1 ? ` (attempt ${navAttempt}/${MAX_NAV_ATTEMPTS})` : "";
-      onProgress({ step: "navigating", detail: `Navigating to ${url}${attemptLabel}`, percent: 10, timestamp: Date.now() });
+    // Navigate with automatic retry. Two phases:
+    //   Phase 1: zip-based proxy — up to 3 attempts with exponential backoff
+    //   Phase 2: state-based fallback proxy (if provided) — up to 2 attempts
+    const isTunnelError = (err: any) =>
+      err?.message?.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
+      err?.message?.includes("ERR_PROXY_CONNECTION_FAILED") ||
+      err?.message?.includes("ERR_CONNECTION_TIMED_OUT") ||
+      err?.message?.includes("net::ERR_");
+
+    const MAX_ZIP_ATTEMPTS = 3;
+    let lastTunnelErr: any = null;
+
+    // Phase 1 — ZIP proxy
+    for (let attempt = 1; attempt <= MAX_ZIP_ATTEMPTS; attempt++) {
+      const label = attempt > 1 ? ` (zip retry ${attempt}/${MAX_ZIP_ATTEMPTS})` : "";
+      onProgress({ step: "navigating", detail: `Navigating to ${url}${label}`, percent: 10, timestamp: Date.now() });
       try {
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-        break; // success — exit retry loop
-      } catch (navErr: any) {
-        const isRetryable =
-          navErr.message?.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
-          navErr.message?.includes("ERR_PROXY_CONNECTION_FAILED") ||
-          navErr.message?.includes("ERR_CONNECTION_TIMED_OUT") ||
-          navErr.message?.includes("net::ERR_");
-        if (isRetryable && navAttempt < MAX_NAV_ATTEMPTS) {
-          const waitMs = 3000 * navAttempt;
+        lastTunnelErr = null;
+        break; // success
+      } catch (err: any) {
+        if (isTunnelError(err)) {
+          if (attempt < MAX_ZIP_ATTEMPTS) {
+            const waitMs = 3000 * attempt;
+            onProgress({
+              step: "field_warning",
+              detail: `Zip proxy tunnel failed, retrying in ${waitMs / 1000}s... (${attempt}/${MAX_ZIP_ATTEMPTS})`,
+              percent: 12,
+              timestamp: Date.now(),
+            });
+            await sleep(waitMs);
+            if (proxy?.username && proxy?.password) {
+              await page.authenticate({ username: proxy.username, password: proxy.password });
+            }
+          } else {
+            lastTunnelErr = err; // exhausted zip attempts
+          }
+        } else {
+          throw err; // non-tunnel error — fail immediately
+        }
+      }
+    }
+
+    // Phase 2 — State fallback (only if zip failed with tunnel errors)
+    if (lastTunnelErr) {
+      if (fallbackProxy) {
+        onProgress({
+          step: "field_warning",
+          detail: `ZIP proxy unavailable (${proxy?.label ?? "zip"}). Switching to state proxy (${fallbackProxy.label ?? "state"})...`,
+          percent: 13,
+          timestamp: Date.now(),
+        });
+        await page.authenticate({ username: fallbackProxy.username, password: fallbackProxy.password });
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
           onProgress({
-            step: "field_warning",
-            detail: `Proxy tunnel failed, retrying in ${waitMs / 1000}s... (${navAttempt}/${MAX_NAV_ATTEMPTS})`,
-            percent: 12,
+            step: "navigating",
+            detail: `Navigating via state proxy (${fallbackProxy.label ?? "state"}) — attempt ${attempt}/2`,
+            percent: 14,
             timestamp: Date.now(),
           });
-          await sleep(waitMs);
-          // Re-authenticate on the page before retrying
-          if (proxy && proxy.username && proxy.password) {
-            await page.authenticate({ username: proxy.username, password: proxy.password });
+          try {
+            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+            break; // success
+          } catch (err: any) {
+            if (attempt < 2) {
+              await sleep(3000);
+              await page.authenticate({ username: fallbackProxy.username, password: fallbackProxy.password });
+            } else {
+              throw new Error(
+                `Both ZIP (${proxy?.label ?? "zip"}) and state (${fallbackProxy.label ?? "state"}) proxies failed. ` +
+                `Last error: ${err.message}`
+              );
+            }
           }
-          continue;
         }
-        throw navErr; // max attempts reached or non-retryable error
+      } else {
+        throw lastTunnelErr; // no fallback available
       }
     }
     await sleep(randomDelay(2000, 3000));
