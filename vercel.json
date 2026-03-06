@@ -9,19 +9,18 @@
             }
         },
         {
-            "src": "server/index.ts",
+            "src": "api/index.ts",
             "use": "@vercel/node"
         }
     ],
-    "routes": [
+    "rewrites": [
         {
-            "src": "/api/(.*)",
-            "dest": "server/index.ts"
+            "source": "/api/(.*)",
+            "destination": "/api/index.ts"
         },
         {
-            "src": "/(.*)",
-            "dest": "client/$1",
-            "check": true
+            "source": "/(.*)",
+            "destination": "/$1"
         }
     ]
 }
