@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
   Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
-  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor
+  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
 import { SiteForm } from "@/components/site-form";
@@ -38,6 +38,7 @@ interface ProxyConfig {
   proxyType: string;
   proxyStateUsername: string;
   proxyCountyUsername: string;
+  proxyCountryUsername: string;
   proxySiteIds: string[] | null;
 }
 
@@ -48,6 +49,7 @@ export function SitesTab() {
   const [scrapedFields, setScrapedFields] = useState<FormField[] | null>(null);
   const [formSelector, setFormSelector] = useState<string | null>(null);
   const [submitSelector, setSubmitSelector] = useState<string | null>(null);
+  const [googleSheetUrl, setGoogleSheetUrl] = useState("");
   const [expandedSite, setExpandedSite] = useState<string | null>(null);
   const [previewSite, setPreviewSite] = useState<Site | null>(null);
   const [previewData, setPreviewData] = useState<Record<string, string>>({});
@@ -80,6 +82,7 @@ export function SitesTab() {
         formSelector,
         submitSelector,
         fields: scrapedFields,
+        googleSheetUrl: googleSheetUrl || null,
       });
       return res.json();
     },
@@ -87,6 +90,7 @@ export function SitesTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/sites"] });
       setUrl("");
       setSiteName("");
+      setGoogleSheetUrl("");
       setScrapedFields(null);
       toast({ title: "Site saved successfully" });
     },
@@ -258,6 +262,16 @@ export function SitesTab() {
                     data-testid="input-site-name"
                   />
                 </div>
+                <div className="flex-1 min-w-[200px]">
+                  <Label className="text-sm">Google Sheet Link (Optional)</Label>
+                  <Input
+                    value={googleSheetUrl}
+                    onChange={(e) => setGoogleSheetUrl(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                    className="mt-1"
+                    data-testid="input-google-sheet-url"
+                  />
+                </div>
                 <Button
                   onClick={() => saveMutation.mutate()}
                   disabled={saveMutation.isPending || scrapedFields.length === 0}
@@ -301,6 +315,17 @@ export function SitesTab() {
                       <div className="min-w-0">
                         <p className="font-medium truncate">{site.name}</p>
                         <p className="text-xs text-muted-foreground truncate">{site.url}</p>
+                        {site.googleSheetUrl && (
+                          <a
+                            href={site.googleSheetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-primary hover:underline flex items-center gap-1 mt-0.5"
+                          >
+                            <FileText className="w-2.5 h-2.5" />
+                            Google Sheet
+                          </a>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -677,11 +702,13 @@ export function ProxyTab() {
     proxyType: "http",
     proxyStateUsername: "",
     proxyCountyUsername: "",
+    proxyCountryUsername: "",
     proxySiteIds: null,
   });
   const [urlTemplate, setUrlTemplate] = useState("");
   const [stateUrlTemplate, setStateUrlTemplate] = useState("");
   const [countyUrlTemplate, setCountyUrlTemplate] = useState("");
+  const [countryUrlTemplate, setCountryUrlTemplate] = useState("");
   const [initialized, setInitialized] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; ip?: string; message?: string } | null>(null);
 
@@ -699,12 +726,18 @@ export function ProxyTab() {
         ? `${d.proxyType || "http"}://${d.proxyCountyUsername}:${d.proxyPassword}@${d.proxyHost}:${d.proxyPort}`
         : ""
     );
+    setCountryUrlTemplate(
+      d.proxyCountryUsername
+        ? `${d.proxyType || "http"}://${d.proxyCountryUsername}:${d.proxyPassword}@${d.proxyHost}:${d.proxyPort}`
+        : ""
+    );
     setInitialized(true);
   }
 
   const urlValid = urlTemplate === "" ? null : parseProxyUrl(urlTemplate) !== null;
   const stateUrlValid = stateUrlTemplate === "" ? null : parseProxyUrl(stateUrlTemplate) !== null;
   const countyUrlValid = countyUrlTemplate === "" ? null : parseProxyUrl(countyUrlTemplate) !== null;
+  const countryUrlValid = countryUrlTemplate === "" ? null : parseProxyUrl(countryUrlTemplate) !== null;
 
   const handleUrlChange = (val: string) => {
     setUrlTemplate(val);
@@ -731,6 +764,16 @@ export function ProxyTab() {
       setConfig((prev) => ({ ...prev, proxyCountyUsername: parsed.proxyUsername || "" }));
     } else if (val === "") {
       setConfig((prev) => ({ ...prev, proxyCountyUsername: "" }));
+    }
+  };
+
+  const handleCountryUrlChange = (val: string) => {
+    setCountryUrlTemplate(val);
+    const parsed = parseProxyUrl(val);
+    if (parsed) {
+      setConfig((prev) => ({ ...prev, proxyCountryUsername: parsed.proxyUsername || "" }));
+    } else if (val === "") {
+      setConfig((prev) => ({ ...prev, proxyCountryUsername: "" }));
     }
   };
 
@@ -787,6 +830,7 @@ export function ProxyTab() {
   const hasZipPlaceholder = (config.proxyUsername ?? "").includes("{zip}");
   const hasStatePlaceholder = (config.proxyStateUsername ?? "").includes("{state}");
   const hasCountyPlaceholder = (config.proxyCountyUsername ?? "").includes("{county}");
+  const hasCountryPlaceholder = (config.proxyCountryUsername ?? "").includes("{country}");
 
   const zipPreviewUrl = hasZipPlaceholder
     ? buildProxyUrl({ ...config, proxyUsername: config.proxyUsername.replace(/\{zip\}/g, "90210") })
@@ -807,6 +851,15 @@ export function ProxyTab() {
       proxyUsername: hasCountyPlaceholder
         ? config.proxyCountyUsername.replace(/\{county\}/g, "orange_county")
         : `${config.proxyCountyUsername}-orange_county`
+    })
+    : "";
+
+  const countryPreviewUrl = config.proxyCountryUsername
+    ? buildProxyUrl({
+      ...config,
+      proxyUsername: hasCountryPlaceholder
+        ? config.proxyCountryUsername.replace(/\{country\}/g, "us")
+        : `${config.proxyCountryUsername}-us`
     })
     : "";
 
@@ -921,6 +974,39 @@ export function ProxyTab() {
             <p className="text-xs text-muted-foreground">
               Use <code className="bg-muted px-1 rounded text-[11px]">{"{county}"}</code> in the username — replaced with the agent's county name on every submission.<br />
               Example: <span className="font-mono text-[11px]">http://user-county-{"{county}"}:password@us.decodo.com:10003</span>
+            </p>
+          </div>
+
+          {/* Priority 4: Country Proxy */}
+          <div className="space-y-2 pt-1 border-t">
+            <div className="flex items-center gap-2 pt-1">
+              <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">4</div>
+              <Label className="text-sm font-semibold">Country Proxy URL (Priority 4 — Final Fallback)</Label>
+            </div>
+            <Input
+              placeholder="http://user-country-{country}:password@us.decodo.com:10003"
+              value={countryUrlTemplate}
+              onChange={(e) => handleCountryUrlChange(e.target.value)}
+              className="font-mono text-sm border-purple-500/30 focus-visible:ring-purple-500/50"
+              data-testid="input-proxy-country-url"
+            />
+            <div className="flex items-center gap-1.5 min-h-[18px]">
+              {countryUrlValid === true && (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-purple-500" />
+                  <span className="text-xs text-purple-500 font-medium">Valid URL</span>
+                </>
+              )}
+              {countryUrlValid === false && (
+                <>
+                  <XCircle className="w-3.5 h-3.5 text-destructive" />
+                  <span className="text-xs text-destructive">Invalid format — expected: <span className="font-mono">http://user:pass@host:port</span></span>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Use <code className="bg-muted px-1 rounded text-[11px]">{"{country}"}</code> in the username — replaced with the country code (e.g. <span className="font-mono">us</span>) on every submission.<br />
+              Example: <span className="font-mono text-[11px]">http://user-country-{"{country}"}:password@us.decodo.com:10003</span>
             </p>
           </div>
 
@@ -1051,7 +1137,7 @@ export function ProxyTab() {
             <p className="text-xs text-muted-foreground">
               This is how the proxy URLs will look when agents submit forms with ZIP and State data.
             </p>
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
               {/* Priority 1 — ZIP */}
               <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
                 <div className="flex items-center gap-1.5">
@@ -1082,8 +1168,18 @@ export function ProxyTab() {
                   {countyPreviewUrl || <span className="text-muted-foreground italic">No County Proxy</span>}
                 </p>
               </div>
+              {/* Priority 4 — Country */}
+              <div className="rounded-md border border-purple-500/20 bg-purple-500/5 p-3 space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-4 h-4 rounded-full bg-purple-500 flex items-center justify-center text-white text-[8px] font-bold">4</div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-purple-500">Country (e.g. US)</p>
+                </div>
+                <p className="font-mono text-[10px] text-purple-600 break-all" data-testid="text-geo-country-preview">
+                  {countryPreviewUrl || <span className="text-muted-foreground italic">No Country Proxy</span>}
+                </p>
+              </div>
             </div>
-            {!config.proxyStateUsername && !config.proxyCountyUsername && (
+            {!config.proxyStateUsername && !config.proxyCountyUsername && !config.proxyCountryUsername && (
               <p className="text-[11px] text-amber-600/80 bg-amber-500/5 border border-amber-500/20 rounded px-3 py-2">
                 ⚠️ No fallback proxies configured — if ZIP proxy fails, the submission will <strong>fail immediately</strong>.
               </p>
@@ -1124,87 +1220,105 @@ export function SubmissionsTab() {
     enabled: !!user && !authLoading && (isAgent || isUser)
   });
 
-  const getSiteName = (id: string) => sitesQuery.data?.find(s => s.id === id)?.name || "Unknown Site";
+  const data = submissionsQuery.data || [];
+  const total = data.length;
+  const successes = data.filter(s => s.status === "success").length;
+  const failures = data.filter(s => s.status === "failed").length;
+  const successRate = total > 0 ? Math.round((successes / total) * 100) : 0;
 
-  if (authLoading) {
-    return <Card><CardContent className="p-8 flex justify-center"><Loader2 className="w-6 h-6 animate-spin" /></CardContent></Card>;
-  }
+  // Group by day
+  const dailyStats = data.reduce((acc: Record<string, any>, sub) => {
+    const day = new Date(sub.createdAt).toLocaleDateString();
+    if (!acc[day]) acc[day] = { day, total: 0, success: 0, failed: 0 };
+    acc[day].total++;
+    if (sub.status === "success") acc[day].success++;
+    else if (sub.status === "failed") acc[day].failed++;
+    return acc;
+  }, {});
 
-  if (!user || (!isAgent && !isUser)) {
-    return <Card><CardContent className="p-8 text-center text-muted-foreground">You do not have permission to view submissions.</CardContent></Card>;
-  }
+  const sortedDays = Object.values(dailyStats).sort((a: any, b: any) =>
+    new Date(b.day).getTime() - new Date(a.day).getTime()
+  );
 
   return (
-    <Card>
-      <CardContent className="p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Site</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Location</TableHead>
-              <TableHead>Method</TableHead>
-              <TableHead>Results</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {submissionsQuery.isLoading || sitesQuery.isLoading ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></TableCell></TableRow>
-            ) : (submissionsQuery.isError || sitesQuery.isError) ? (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Total Submissions</p>
+                <p className="text-2xl font-bold mt-1">{total}</p>
+              </div>
+              <Activity className="w-8 h-8 text-primary opacity-20" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Success Rate</p>
+                <p className="text-2xl font-bold mt-1 text-emerald-500">{successRate}%</p>
+              </div>
+              <CheckCircle2 className="w-8 h-8 text-emerald-500 opacity-20" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Failed</p>
+                <p className="text-2xl font-bold mt-1 text-destructive">{failures}</p>
+              </div>
+              <XCircle className="w-8 h-8 text-destructive opacity-20" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-destructive">
-                  <div className="flex flex-col items-center gap-2">
-                    <XCircle className="w-6 h-6" />
-                    <p className="font-medium">Failed to load submissions</p>
-                    <p className="text-xs">
-                      Submissions: {(submissionsQuery.error as Error)?.message || "OK"} |
-                      Sites: {(sitesQuery.error as Error)?.message || "OK"}
-                    </p>
-                  </div>
-                </TableCell>
+                <TableHead>Date</TableHead>
+                <TableHead className="text-center">Total Submissions</TableHead>
+                <TableHead className="text-center">Success</TableHead>
+                <TableHead className="text-center">Failed</TableHead>
+                <TableHead className="text-right">Success Rate</TableHead>
               </TableRow>
-            ) : submissionsQuery.data?.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No submissions found</TableCell></TableRow>
-            ) : (
-              submissionsQuery.data?.map((sub) => (
-                <TableRow key={sub.id}>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {new Date(sub.createdAt).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="font-medium">{getSiteName(sub.siteId)}</TableCell>
-                  <TableCell>
-                    <Badge variant={sub.status === "success" ? "default" : sub.status === "failed" ? "destructive" : "outline"}>
-                      {sub.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {sub.proxyLocation || "-"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-[10px] uppercase">
-                      {sub.proxyMethod}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[200px]">
-                    <div className="space-y-1">
-                      {sub.extractedData && Object.entries(sub.extractedData as Record<string, string>).map(([k, v]) => (
-                        <div key={k} className="text-[10px] bg-primary/5 p-1 rounded border border-primary/10 truncate" title={`${k}: ${v}`}>
-                          <span className="font-bold opacity-70">{k}:</span> {v}
-                        </div>
-                      ))}
-                      {!sub.extractedData || Object.keys(sub.extractedData).length === 0 ? (
-                        <span className="text-xs text-muted-foreground italic">No extra data</span>
-                      ) : null}
-                    </div>
+            </TableHeader>
+            <TableBody>
+              {submissionsQuery.isLoading || sitesQuery.isLoading ? (
+                <TableRow><TableCell colSpan={5} className="text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></TableCell></TableRow>
+              ) : (submissionsQuery.isError || sitesQuery.isError) ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-8 text-destructive">
+                    <p className="font-medium">Failed to load data</p>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+              ) : sortedDays.length === 0 ? (
+                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No submissions recorded</TableCell></TableRow>
+              ) : (
+                sortedDays.map((day: any) => (
+                  <TableRow key={day.day}>
+                    <TableCell className="font-medium">{day.day}</TableCell>
+                    <TableCell className="text-center font-mono">{day.total}</TableCell>
+                    <TableCell className="text-center text-emerald-500 font-mono">{day.success}</TableCell>
+                    <TableCell className="text-center text-destructive font-mono">{day.failed}</TableCell>
+                    <TableCell className="text-right font-mono font-bold">
+                      {Math.round((day.success / day.total) * 100)}%
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

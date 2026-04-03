@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { pool } from "./db";
 import { authMiddleware, generateToken, requireRole, type JwtPayload } from "./auth";
 import { scrapeFormFields } from "./scraper";
 import { loginSchema, registerSchema, proxyConfigSchema, createAgentSchema } from "@shared/schema";
@@ -12,6 +13,7 @@ import { autoFillForm, extractTrustedFormData, type AutoFillProgress, type Proxy
 import { getWorkingProxy } from "./proxy-tester";
 
 const sseClients = new Map<string, import("express").Response[]>();
+const abortControllers = new Map<string, AbortController>();
 
 function normalizeProxyHost(host: string): string {
   const stripped = host.trim().replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "").split("/")[0].trim();
@@ -34,6 +36,7 @@ function sendSSE(submissionId: string, data: AutoFillProgress) {
 
 const ZIP_FIELD_NAMES = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_FIELD_NAMES = ["state", "state_name"];
+const COUNTRY_FIELD_NAMES = ["country", "country_code", "country_name"];
 
 const US_STATE_CODES: Record<string, string> = {
   alabama: "al", alaska: "ak", arizona: "az", arkansas: "ar", california: "ca",
@@ -57,10 +60,11 @@ function lookupStateCode(stateValue: string): string | null {
 }
 
 // Consolidated geo extraction
-function extractGeoTargets(formData: Record<string, string>, fields?: import("@shared/schema").FormField[]): { zip: string | null; state: string | null; county: string | null } {
+function extractGeoTargets(formData: Record<string, string>, fields?: import("@shared/schema").FormField[]): { zip: string | null; state: string | null; county: string | null; country: string | null } {
   let zip: string | null = null;
   let state: string | null = null;
   let county: string | null = null;
+  let country: string | null = null;
 
   // 1. Explicit geoRole assignment wins
   if (fields && fields.length > 0) {
@@ -106,7 +110,18 @@ function extractGeoTargets(formData: Record<string, string>, fields?: import("@s
     }
   }
 
-  return { zip, state, county };
+  // Country: check form data by field name heuristics, default to "us" if not found
+  for (const key of Object.keys(formData)) {
+    if (matchesCountryField(key) && formData[key]?.trim()) {
+      country = formData[key].trim().toLowerCase();
+      break;
+    }
+  }
+  if (!country) {
+    country = "us"; // Default country fallback
+  }
+
+  return { zip, state, county, country };
 }
 
 function buildStateFallbackUsername(baseUsername: string, stateCode: string): string {
@@ -121,6 +136,7 @@ function buildStateFallbackUsername(baseUsername: string, stateCode: string): st
 const ZIP_KEYWORDS = ["zip", "postal"];
 const STATE_KEYWORDS = ["state"];
 const COUNTY_KEYWORDS = ["county", "parish", "borough"];
+const COUNTRY_KEYWORDS = ["country"];
 
 function matchesZipField(key: string): boolean {
   const k = key.toLowerCase();
@@ -148,6 +164,14 @@ function matchesCountyField(key: string): boolean {
   return false;
 }
 
+function matchesCountryField(key: string): boolean {
+  const k = key.toLowerCase();
+  if (COUNTRY_FIELD_NAMES.includes(k)) return true;
+  if (COUNTRY_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "_") || k.startsWith(kw + "-") || k.startsWith(kw + " "))) return true;
+  if (COUNTRY_KEYWORDS.some((kw) => k.endsWith("_" + kw) || k.endsWith("-" + kw) || k.endsWith(" " + kw))) return true;
+  return false;
+}
+
 
 
 
@@ -165,8 +189,7 @@ export async function registerRoutes(
         database: dbStatus,
         time: new Date().toISOString(),
         env: {
-          node: process.env.NODE_ENV,
-          vercel: process.env.VERCEL || "false"
+          node: process.env.NODE_ENV
         }
       });
     } catch (err: any) {
@@ -267,9 +290,9 @@ export async function registerRoutes(
 
   app.patch("/api/admin/users/:id/toggle", authMiddleware, requireRole("admin"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.params.id);
+      const user = await storage.getUser(req.params.id as string);
       if (!user) return res.status(404).json({ message: "User not found" });
-      const updated = await storage.updateUser(req.params.id, { isActive: !user.isActive });
+      const updated = await storage.updateUser(req.params.id as string, { isActive: !user.isActive });
       return res.json(updated);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -278,7 +301,7 @@ export async function registerRoutes(
 
   app.delete("/api/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
     try {
-      await storage.deleteUser(req.params.id);
+      await storage.deleteUser(req.params.id as string);
       return res.json({ success: true });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -485,6 +508,8 @@ export async function registerRoutes(
     try {
       const bodySchema = proxyConfigSchema.extend({
         proxyStateUsername: z.string().optional(),
+        proxyCountyUsername: z.string().optional(),
+        proxyCountryUsername: z.string().optional(),
         proxySiteIds: z.array(z.string()).nullable().optional(),
       });
       const parsed = bodySchema.safeParse(req.body);
@@ -499,6 +524,8 @@ export async function registerRoutes(
         proxyPassword: parsed.data.proxyPassword,
         proxyType: parsed.data.proxyType,
         proxyStateUsername: parsed.data.proxyStateUsername ?? null,
+        proxyCountyUsername: parsed.data.proxyCountyUsername ?? null,
+        proxyCountryUsername: parsed.data.proxyCountryUsername ?? null,
         proxySiteIds: parsed.data.proxySiteIds !== undefined ? parsed.data.proxySiteIds : null,
       });
 
@@ -529,6 +556,8 @@ export async function registerRoutes(
         proxyPassword: user.proxyPassword || "",
         proxyType: user.proxyType || "http",
         proxyStateUsername: user.proxyStateUsername || "",
+        proxyCountyUsername: user.proxyCountyUsername || "",
+        proxyCountryUsername: user.proxyCountryUsername || "",
         proxySiteIds,
       });
     } catch (error: any) {
@@ -585,7 +614,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/agent/submissions/:id/progress", authMiddleware, requireRole("agent"), async (req, res) => {
-    const submissionId = req.params.id;
+    const submissionId = req.params.id as string;
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -655,12 +684,13 @@ export async function registerRoutes(
             proxyConfigured = true;
 
             // Extract ZIP and state from the form data submitted by the agent
-            const { zip: zipValue, state: stateCode, county: countyValue } = extractGeoTargets(formData, (site.fields || []) as FormField[]);
-            const zipUsernameTemplate = parentUser.proxyUsername; // e.g. user-zip-{zip}
+            const { zip: zipValue, state: stateCode, county: countyValue, country: countryValue } = extractGeoTargets(formData, (site.fields || []) as FormField[]);
+            const zipUsernameTemplate = parentUser.proxyUsername || null; // e.g. user-zip-{zip}
             const stateUsernameTemplate = parentUser.proxyStateUsername || null; // e.g. user-state-{state}
             const countyUsernameTemplate = parentUser.proxyCountyUsername || null; // e.g. user-county-{county}
+            const countryUsernameTemplate = parentUser.proxyCountryUsername || null; // e.g. user-country-{country}
 
-            console.log(`[submission] [${siteId}] Geo extracted — zip: ${zipValue}, state: ${stateCode}, county: ${countyValue}`);
+            console.log(`[submission] [${siteId}] Geo extracted — zip: ${zipValue}, state: ${stateCode}, county: ${countyValue}, country: ${countryValue}`);
 
             let workingResult;
             try {
@@ -668,6 +698,7 @@ export async function registerRoutes(
                 zipValue,
                 stateCode,
                 countyValue,
+                countryValue,
                 {
                   host: normalizeProxyHost(parentUser.proxyHost),
                   port: parentUser.proxyPort,
@@ -676,7 +707,8 @@ export async function registerRoutes(
                 },
                 zipUsernameTemplate,
                 stateUsernameTemplate,
-                countyUsernameTemplate
+                countyUsernameTemplate,
+                countryUsernameTemplate
               );
             } catch (proxyError: any) {
               console.error(`[submission] [${siteId}] Proxy resolution failed:`, proxyError.message);
@@ -705,6 +737,9 @@ export async function registerRoutes(
             });
 
             console.log(`[submission] [${submission.id}] Initiating auto-fill for ${site.url} via proxy...`);
+            const controller = new AbortController();
+            abortControllers.set(submission.id, controller);
+
             autoFillForm(
               site.url,
               fields,
@@ -715,7 +750,8 @@ export async function registerRoutes(
                 if (progress.step === "error") console.error(`[submission] [${submission.id}] Error: ${progress.detail}`);
                 sendSSE(submission.id, progress);
               },
-              fallbackProxy
+              fallbackProxy,
+              controller.signal
             ).then(async (result) => {
               console.log(`[submission] [${submission.id}] Complete — success: ${result.success}`);
               await storage.updateSubmission(submission.id, {
@@ -740,6 +776,8 @@ export async function registerRoutes(
                 errorMessage: err.message,
               });
               sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
+            }).finally(() => {
+              abortControllers.delete(submission.id);
             });
 
             return res.json({
@@ -763,13 +801,18 @@ export async function registerRoutes(
         status: "running",
       });
 
+      const controller = new AbortController();
+      abortControllers.set(submission.id, controller);
+
       autoFillForm(
         site.url,
         fields,
         formData,
         site.submitSelector,
         null,
-        (progress) => sendSSE(submission.id, progress)
+        (progress) => sendSSE(submission.id, progress),
+        null,
+        controller.signal
       ).then(async (result) => {
         await storage.updateSubmission(submission.id, {
           status: result.success ? "success" : "failed",
@@ -792,6 +835,8 @@ export async function registerRoutes(
           errorMessage: err.message,
         });
         sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
+      }).finally(() => {
+        abortControllers.delete(submission.id);
       });
 
       return res.json(submission);

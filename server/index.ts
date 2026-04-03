@@ -6,18 +6,16 @@ import { existsSync } from "fs";
 import { execSync } from "child_process";
 // Ensure Chrome is installed before starting — it gets wiped on container restarts
 // Skip this on Vercel as it handles things differently or won't support it this way anyway
-if (!process.env.VERCEL) {
-  try {
-    const puppeteer = await import("puppeteer");
-    const chromePath = puppeteer.default.executablePath();
-    if (!existsSync(chromePath)) {
-      console.log("[startup] Chrome not found, installing via puppeteer...");
-      execSync("node node_modules/puppeteer/install.mjs", { stdio: "inherit" });
-      console.log("[startup] Chrome installed successfully.");
-    }
-  } catch (err: any) {
-    console.warn("[startup] Chrome install check failed:", err.message);
+try {
+  const puppeteer = await import("puppeteer");
+  const chromePath = puppeteer.default.executablePath();
+  if (!existsSync(chromePath)) {
+    console.log("[startup] Chrome not found, installing via puppeteer...");
+    execSync("node node_modules/puppeteer/install.mjs", { stdio: "inherit" });
+    console.log("[startup] Chrome installed successfully.");
   }
+} catch (err: any) {
+  console.warn("[startup] Chrome install check failed:", err.message);
 }
 
 const app = express();
@@ -106,18 +104,16 @@ try {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  if (!process.env.VERCEL) {
-    const port = parseInt(process.env.PORT || "5000", 10);
-    httpServer.listen(
-      {
-        port,
-        host: "0.0.0.0",
-      },
-      () => {
-        log(`serving on port ${port}`);
-      },
-    );
-  }
+  const port = parseInt(process.env.PORT || "5000", 10);
+  httpServer.listen(
+    {
+      port,
+      host: "0.0.0.0",
+    },
+    () => {
+      log(`serving on port ${port}`);
+    },
+  );
 } catch (err: any) {
   console.error("[startup] CRITICAL ERROR DURING INITIALIZATION:", err);
   // On Vercel, we might want to log this and still export the app

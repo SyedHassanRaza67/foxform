@@ -62,7 +62,7 @@ export function AppSidebar() {
           </div>
           {state === "expanded" && (
             <div className="animate-in fade-in duration-300">
-              <h2 className="font-bold font-mono text-sm tracking-tight">ProxyForm</h2>
+              <h2 className="font-bold font-mono text-sm tracking-tight text-primary">Welcome, {user.name}</h2>
               <p className="text-xs text-muted-foreground">v1.0</p>
             </div>
           )}

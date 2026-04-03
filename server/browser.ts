@@ -197,14 +197,20 @@ export async function autoFillForm(
   submitSelector: string | null,
   proxy: ProxyConfig | null,
   onProgress: ProgressCallback,
-  fallbackProxy: ProxyConfig | null = null
+  fallbackProxy: ProxyConfig | null = null,
+  signal?: AbortSignal
 ): Promise<AutoFillResult> {
   const startTime = Date.now();
   let browser: any = null;
   let page: any = null;
   let currentExtractedData: Record<string, string> = {};
 
+  const checkAbort = () => {
+    if (signal?.aborted) throw new Error("Submission cancelled by user");
+  };
+
   try {
+    checkAbort();
     onProgress({ step: "launching", detail: "Launching", percent: 5, timestamp: Date.now() });
 
     // Dynamic imports to save cold-start time and memory on Vercel
@@ -231,6 +237,7 @@ export async function autoFillForm(
       executablePath: puppeteer.executablePath(),
       args: launchArgs,
     });
+    checkAbort();
 
     page = await browser.newPage();
     console.log(`[browser] New page created, navigating to ${url}`);
@@ -259,6 +266,7 @@ export async function autoFillForm(
     for (let attempt = 1; attempt <= MAX_ZIP_ATTEMPTS; attempt++) {
       const label = attempt > 1 ? ` (retry ${attempt}/${MAX_ZIP_ATTEMPTS})` : "";
       onProgress({ step: "navigating", detail: `Navigating${label}`, percent: 10, timestamp: Date.now() });
+      checkAbort();
       try {
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
         lastTunnelErr = null;
@@ -385,6 +393,7 @@ export async function autoFillForm(
       (f) => f.selector && f.name && formData[f.name] !== undefined && formData[f.name] !== ""
     );
     const totalFields = filledFields.length;
+    checkAbort();
 
     // Wait for the first text field to appear — ensures the form is fully loaded before filling
     const firstTextField = filledFields.find((f) => f.type !== "checkbox" && f.type !== "radio" && f.selector);
@@ -484,6 +493,7 @@ export async function autoFillForm(
     }
 
     onProgress({ step: "fields_complete", detail: "All fields saved", percent: 82, timestamp: Date.now() });
+    checkAbort();
     await sleep(randomDelay(800, 1500));
 
     onProgress({ step: "submitting", detail: "Submitting", percent: 85, timestamp: Date.now() });

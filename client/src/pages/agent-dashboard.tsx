@@ -247,6 +247,13 @@ export default function AgentDashboard() {
   };
 
   const handleCloseProgress = () => {
+    // If submission is active, cancel it on the server
+    if (isBusy && activeSubmissionId) {
+      console.log(`[dashboard] Logic: Closing busy progress window, sending cancel request for ${activeSubmissionId}`);
+      apiRequest("POST", `/api/agent/submissions/${activeSubmissionId}/cancel`).catch(() => { });
+      toast({ title: "Submission Cancelled", description: "The automation has been stopped." });
+    }
+
     // User requested to fix close icon - allow closure even if busy
     setShowProgressDialog(false);
 
@@ -291,7 +298,7 @@ export default function AgentDashboard() {
   return (
     <div className="space-y-6" data-testid="agent-dashboard">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Agent Dashboard</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-primary">Welcome, {user?.name}</h1>
         <p className="text-muted-foreground text-sm mt-1">
           Select a site to fill and submit its form
         </p>
