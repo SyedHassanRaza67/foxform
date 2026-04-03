@@ -6,17 +6,19 @@ import { existsSync } from "fs";
 import { execSync } from "child_process";
 // Ensure Chrome is installed before starting — it gets wiped on container restarts
 // Skip this on Vercel as it handles things differently or won't support it this way anyway
-try {
-  const puppeteer = await import("puppeteer");
-  const chromePath = puppeteer.default.executablePath();
-  if (!existsSync(chromePath)) {
-    console.log("[startup] Chrome not found, installing via puppeteer...");
-    execSync("node node_modules/puppeteer/install.mjs", { stdio: "inherit" });
-    console.log("[startup] Chrome installed successfully.");
+const checkChrome = async () => {
+  try {
+    const puppeteer = await import("puppeteer");
+    const chromePath = puppeteer.default.executablePath();
+    if (!existsSync(chromePath)) {
+      console.log("[startup] Chrome not found, installing via puppeteer...");
+      execSync("node node_modules/puppeteer/install.mjs", { stdio: "inherit" });
+      console.log("[startup] Chrome installed successfully.");
+    }
+  } catch (err: any) {
+    console.warn("[startup] Chrome install check failed:", err.message);
   }
-} catch (err: any) {
-  console.warn("[startup] Chrome install check failed:", err.message);
-}
+};
 
 const app = express();
 const httpServer = createServer(app);
@@ -74,50 +76,56 @@ app.use((req, res, next) => {
   next();
 });
 
-try {
-  await registerRoutes(httpServer, app);
+const startServer = async () => {
+  await checkChrome();
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+  try {
+    await registerRoutes(httpServer, app);
 
-    console.error("Internal Server Error:", err);
+    app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+      const status = err.status || err.statusCode || 500;
+      const message = err.message || "Internal Server Error";
 
-    if (res.headersSent) {
-      return next(err);
+      console.error("Internal Server Error:", err);
+
+      if (res.headersSent) {
+        return next(err);
+      }
+
+      return res.status(status).json({ message });
+    });
+
+    // importantly only setup vite in development and after
+    // setting up all the other routes so the catch-all route
+    // doesn't interfere with the other routes
+    if (process.env.NODE_ENV === "production") {
+      serveStatic(app);
+    } else {
+      const { setupVite } = await import("./vite");
+      await setupVite(httpServer, app);
     }
 
-    return res.status(status).json({ message });
-  });
-
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
-  } else {
-    const { setupVite } = await import("./vite");
-    await setupVite(httpServer, app);
+    // ALWAYS serve the app on the port specified in the environment variable PORT
+    // Other ports are firewalled. Default to 5000 if not specified.
+    // this serves both the API and the client.
+    // It is the only port that is not firewalled.
+    const port = parseInt(process.env.PORT || "5000", 10);
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+      },
+      () => {
+        log(`serving on port ${port}`);
+      },
+    );
+  } catch (err: any) {
+    console.error("[startup] CRITICAL ERROR DURING INITIALIZATION:", err);
+    // On Vercel, we might want to log this and still export the app
+    // but the app might be in a broken state.
   }
+};
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
-} catch (err: any) {
-  console.error("[startup] CRITICAL ERROR DURING INITIALIZATION:", err);
-  // On Vercel, we might want to log this and still export the app
-  // but the app might be in a broken state.
-}
+startServer();
 
 export default app;
