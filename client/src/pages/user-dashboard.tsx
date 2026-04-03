@@ -350,24 +350,32 @@ export function SitesTab() {
                             Google Sheet
                           </a>
                         )}
+                        {site.notes && (
+                          <div className="mt-2 space-y-1">
+                            {extractLinks(site.notes).length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {extractLinks(site.notes).map((link, idx) => (
+                                  <a
+                                    key={idx}
+                                    href={link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[10px] flex items-center gap-1 hover:bg-primary/20 transition-colors border border-primary/20"
+                                  >
+                                    <Globe className="w-2.5 h-2.5" />
+                                    {new URL(link).hostname}
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-muted-foreground italic border-l-2 border-primary/20 pl-2 py-0.5 bg-muted/30 rounded-r">
+                                {site.notes.length > 100 ? `${site.notes.substring(0, 100)}...` : site.notes}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
-                    {site.notes && (
-                      <div className="w-full mt-2 flex flex-wrap gap-2 px-8">
-                        {extractLinks(site.notes).map((link, idx) => (
-                          <a
-                            key={idx}
-                            href={link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[10px] flex items-center gap-1 hover:bg-primary/20 transition-colors"
-                          >
-                            <Globe className="w-2.5 h-2.5" />
-                            {new URL(link).hostname}
-                          </a>
-                        ))}
-                      </div>
-                    )}
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="font-mono">
                         {(site.fields as FormField[])?.length || 0} fields
