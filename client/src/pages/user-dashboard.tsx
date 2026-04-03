@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
   FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity
@@ -55,6 +56,8 @@ export function SitesTab() {
   const [previewData, setPreviewData] = useState<Record<string, string>>({});
   // geoRoleEdits: siteId -> { fieldName -> geoRole }
   const [geoRoleEdits, setGeoRoleEdits] = useState<Record<string, Record<string, "zip" | "state" | "county" | null>>>({});
+  // noteEdits: siteId -> note text
+  const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/sites"] });
 
@@ -108,18 +111,27 @@ export function SitesTab() {
   });
 
   const updateFieldRolesMutation = useMutation({
-    mutationFn: async ({ siteId, fields }: { siteId: string; fields: FormField[] }) => {
-      await apiRequest("PUT", `/api/sites/${siteId}`, { fields });
+    mutationFn: async ({ siteId, fields, notes }: { siteId: string; fields?: FormField[]; notes?: string }) => {
+      await apiRequest("PUT", `/api/sites/${siteId}`, { fields, notes });
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/sites"] });
       // Clear local edits so the UI reflects the saved DB state
-      setGeoRoleEdits((prev) => {
-        const next = { ...prev };
-        delete next[variables.siteId];
-        return next;
-      });
-      toast({ title: "Geo roles saved" });
+      if (variables.fields) {
+        setGeoRoleEdits((prev) => {
+          const next = { ...prev };
+          delete next[variables.siteId];
+          return next;
+        });
+      }
+      if (variables.notes !== undefined) {
+        setNoteEdits((prev) => {
+          const next = { ...prev };
+          delete next[variables.siteId];
+          return next;
+        });
+      }
+      toast({ title: "Site updated successfully" });
     },
     onError: (err: any) => {
       toast({ title: "Save failed", description: String(err?.message || err), variant: "destructive" });
@@ -156,6 +168,12 @@ export function SitesTab() {
       geoRole: f.name in edits ? edits[f.name] : (f.geoRole ?? null),
     }));
     updateFieldRolesMutation.mutate({ siteId: site.id, fields: updatedFields });
+  };
+
+  const handleSaveNotes = (site: Site) => {
+    const notes = noteEdits[site.id];
+    if (notes === undefined) return;
+    updateFieldRolesMutation.mutate({ siteId: site.id, notes } as any);
   };
 
   const getFieldGeoRole = (site: Site, fieldName: string): "zip" | "state" | "county" | null => {
@@ -382,6 +400,34 @@ export function SitesTab() {
                           Save Roles
                         </Button>
                       </div>
+
+                      <Separator className="my-4" />
+
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-semibold">Notes & Links</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">Private notes, links, or instructions for this site.</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSaveNotes(site)}
+                            disabled={updateFieldRolesMutation.isPending || noteEdits[site.id] === undefined}
+                          >
+                            {updateFieldRolesMutation.isPending ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : <Save className="w-3 h-3 mr-1.5" />}
+                            Save Notes
+                          </Button>
+                        </div>
+                        <Textarea
+                          placeholder="Add site-specific notes or links here..."
+                          className="min-h-[100px] text-sm resize-none"
+                          value={noteEdits[site.id] !== undefined ? noteEdits[site.id] : (site.notes || "")}
+                          onChange={(e) => setNoteEdits({ ...noteEdits, [site.id]: e.target.value })}
+                        />
+                      </div>
+
+                      <Separator className="my-4" />
                       <div className="rounded-md border overflow-x-auto">
                         <Table>
                           <TableHeader>

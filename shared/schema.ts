@@ -46,6 +46,7 @@ export const sites = pgTable("sites", {
   submitSelector: text("submit_selector"),
   fields: jsonb("fields").$type<FormField[]>().default([]),
   googleSheetUrl: text("google_sheet_url"),
+  notes: text("notes"),
   isActive: boolean("is_active").notNull().default(true),
   scrapedAt: timestamp("scraped_at").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),

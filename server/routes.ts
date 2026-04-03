@@ -411,24 +411,36 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/sites/:id", authMiddleware, requireRole("user"), async (req, res) => {
-    try {
-      const site = await storage.getSite(req.params.id);
-      if (!site) return res.status(404).json({ message: "Site not found" });
-      if (site.ownerId !== req.user!.userId) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-      const { fields } = req.body;
-      if (!Array.isArray(fields)) {
-        return res.status(400).json({ message: "fields array required" });
-      }
+    app.put("/api/sites/:id", authMiddleware, requireRole("user"), async (req, res) => {
+      try {
+        const site = await storage.getSite(req.params.id);
+        if (!site) return res.status(404).json({ message: "Site not found" });
+        if (site.ownerId !== req.user!.userId) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        const { fields, notes } = req.body;
+        
+        const updateData: any = {};
+        if (fields !== undefined) {
+          if (!Array.isArray(fields)) {
+            return res.status(400).json({ message: "fields must be an array" });
+          }
+          updateData.fields = fields;
+        }
+        if (notes !== undefined) {
+          updateData.notes = notes;
+        }
 
-      const updated = await storage.updateSite(req.params.id, { fields });
-      return res.json(updated);
-    } catch (error: any) {
-      return res.status(500).json({ message: error.message });
-    }
-  });
+        if (Object.keys(updateData).length === 0) {
+          return res.status(400).json({ message: "No data provided to update" });
+        }
+
+        const updated = await storage.updateSite(req.params.id, updateData);
+        return res.json(updated);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    });
 
   app.post("/api/agents", authMiddleware, requireRole("user"), async (req, res) => {
     try {
