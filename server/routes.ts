@@ -413,13 +413,16 @@ export async function registerRoutes(
 
     app.put("/api/sites/:id", authMiddleware, requireRole("user"), async (req, res) => {
       try {
-        const site = await storage.getSite(req.params.id);
+        const siteId = String(req.params.id);
+        const site = await storage.getSite(siteId);
         if (!site) return res.status(404).json({ message: "Site not found" });
         if (site.ownerId !== req.user!.userId) {
           return res.status(403).json({ message: "Access denied" });
         }
         const { fields, notes } = req.body;
         
+        console.log(`[sites] Updating site ${siteId}:`, { hasFields: !!fields, hasNotes: notes !== undefined });
+
         const updateData: any = {};
         if (fields !== undefined) {
           if (!Array.isArray(fields)) {
@@ -435,9 +438,11 @@ export async function registerRoutes(
           return res.status(400).json({ message: "No data provided to update" });
         }
 
-        const updated = await storage.updateSite(req.params.id, updateData);
+        const updated = await storage.updateSite(siteId, updateData);
+        console.log(`[sites] Site ${siteId} updated successfully.`);
         return res.json(updated);
       } catch (error: any) {
+        console.error(`[sites] Failed to update site ${req.params.id}:`, error);
         return res.status(500).json({ message: error.message });
       }
     });

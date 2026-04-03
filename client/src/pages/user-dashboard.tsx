@@ -43,6 +43,12 @@ interface ProxyConfig {
   proxySiteIds: string[] | null;
 }
 
+function extractLinks(text?: string | null): string[] {
+  if (!text) return [];
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.match(urlRegex) || [];
+}
+
 export function SitesTab() {
   const { toast } = useToast();
   const [url, setUrl] = useState("");
@@ -346,6 +352,22 @@ export function SitesTab() {
                         )}
                       </div>
                     </div>
+                    {site.notes && (
+                      <div className="w-full mt-2 flex flex-wrap gap-2 px-8">
+                        {extractLinks(site.notes).map((link, idx) => (
+                          <a
+                            key={idx}
+                            href={link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[10px] flex items-center gap-1 hover:bg-primary/20 transition-colors"
+                          >
+                            <Globe className="w-2.5 h-2.5" />
+                            {new URL(link).hostname}
+                          </a>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="font-mono">
                         {(site.fields as FormField[])?.length || 0} fields
@@ -406,24 +428,26 @@ export function SitesTab() {
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            <p className="text-sm font-semibold">Notes & Links</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">Private notes, links, or instructions for this site.</p>
+                            <p className="text-sm font-semibold">Saved Links & Important Details</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">Keep track of affiliate links, login details, or specific notes for this site.</p>
                           </div>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => handleSaveNotes(site)}
                             disabled={updateFieldRolesMutation.isPending || noteEdits[site.id] === undefined}
+                            data-testid={`button-save-notes-${site.id}`}
                           >
                             {updateFieldRolesMutation.isPending ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : <Save className="w-3 h-3 mr-1.5" />}
-                            Save Notes
+                            Save Info
                           </Button>
                         </div>
                         <Textarea
-                          placeholder="Add site-specific notes or links here..."
-                          className="min-h-[100px] text-sm resize-none"
+                          placeholder="Paste links or type your notes here... (e.g. https://github.com/ ...)"
+                          className="min-h-[100px] text-sm resize-none focus-visible:ring-primary/40"
                           value={noteEdits[site.id] !== undefined ? noteEdits[site.id] : (site.notes || "")}
                           onChange={(e) => setNoteEdits({ ...noteEdits, [site.id]: e.target.value })}
+                          data-testid={`textarea-notes-${site.id}`}
                         />
                       </div>
 
