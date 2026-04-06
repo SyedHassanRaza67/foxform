@@ -715,14 +715,23 @@ export async function autoFillForm(
 
             if (el) {
               await el.evaluate((node: Element) => node.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-              await sleep(400);
-              const ok = await el.click().then(() => true).catch(async () =>
-                page.evaluate((node: Element) => { (node as HTMLElement).click(); return true; }, el).catch(() => false)
-              );
-              if (ok) {
+              await sleep(randomDelay(200, 500));
+              
+              // Human-like physical click so trackers register real pointer intent
+              try {
+                await humanMouseMove(page, el);
+                await el.click({ delay: randomDelay(40, 100) });
                 clickFired = true;
-                console.log(`[browser] Clicked submit via selector: ${sel}`);
+                console.log(`[browser] Clicked submit via strictly physical pointer path: ${sel}`);
                 break;
+              } catch (mouseErr) {
+                 // Fallback to evaluating JS click if physical click fails (e.g., hidden element or covered)
+                 const ok = await page.evaluate((node: Element) => { (node as HTMLElement).click(); return true; }, el).catch(() => false);
+                 if (ok) {
+                   clickFired = true;
+                   console.log(`[browser] Clicked submit via JS click: ${sel}`);
+                   break;
+                 }
               }
             }
           } catch { }
@@ -788,6 +797,9 @@ export async function autoFillForm(
 
         // --- Step 3B: Last resort B — form.requestSubmit() (triggers native HTML5 validation + submit) ---
         if (!clickFired) {
+          console.warn("[browser] WARNING: Could not click a physical submit button. Bypassing UI and using form.requestSubmit(). This MAY cause backend save scripts (like Google Sheets) to fail!");
+          onProgress({ step: "field_warning", detail: "Used fallback submit. Google Sheet saving may fail.", percent: 85 + attempt, timestamp: Date.now() });
+          
           const requestSubmitOk = await page.evaluate(() => {
             const form = document.querySelector('form') as HTMLFormElement | null;
             if (form && typeof form.requestSubmit === 'function') {

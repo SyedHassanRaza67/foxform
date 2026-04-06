@@ -711,9 +711,29 @@ export async function registerRoutes(
             // Extract ZIP and state from the form data submitted by the agent
             const { zip: zipValue, state: stateCode, county: countyValue, country: countryValue } = extractGeoTargets(formData, (site.fields || []) as FormField[]);
             const zipUsernameTemplate = parentUser.proxyUsername || null; // e.g. user-zip-{zip}
-            const stateUsernameTemplate = parentUser.proxyStateUsername || null; // e.g. user-state-{state}
-            const countyUsernameTemplate = parentUser.proxyCountyUsername || null; // e.g. user-county-{county}
-            const countryUsernameTemplate = parentUser.proxyCountryUsername || null; // e.g. user-country-{country}
+            let stateUsernameTemplate = parentUser.proxyStateUsername || null; // e.g. user-state-{state}
+            let countyUsernameTemplate = parentUser.proxyCountyUsername || null; // e.g. user-county-{county}
+            let countryUsernameTemplate = parentUser.proxyCountryUsername || null; // e.g. user-country-{country}
+
+            // Auto-generate missing templates from the base zip template
+            if (zipUsernameTemplate) {
+              const base = zipUsernameTemplate;
+              if (!stateUsernameTemplate) {
+                if (base.includes("zip-{zip}")) stateUsernameTemplate = base.replace("zip-{zip}", "state-{state}");
+                else if (base.includes("{zip}")) stateUsernameTemplate = base.replace(/\{zip\}/g, "{state}");
+                else stateUsernameTemplate = base; // legacy fallback in proxy-tester will handle it
+              }
+              if (!countyUsernameTemplate) {
+                if (base.includes("zip-{zip}")) countyUsernameTemplate = base.replace("zip-{zip}", "county-{county}");
+                else if (base.includes("{zip}")) countyUsernameTemplate = base.replace(/\{zip\}/g, "{county}");
+                else countyUsernameTemplate = base;
+              }
+              if (!countryUsernameTemplate) {
+                if (base.includes("zip-{zip}")) countryUsernameTemplate = base.replace("zip-{zip}", "country-{country}");
+                else if (base.includes("{zip}")) countryUsernameTemplate = base.replace(/\{zip\}/g, "{country}");
+                else countryUsernameTemplate = base;
+              }
+            }
 
             console.log(`[submission] [${siteId}] Geo extracted — zip: ${zipValue}, state: ${stateCode}, county: ${countyValue}, country: ${countryValue}`);
 

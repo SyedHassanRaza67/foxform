@@ -17,7 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
-  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity
+  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity, Pencil
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
 import { SiteForm } from "@/components/site-form";
@@ -60,6 +60,7 @@ export function SitesTab() {
   const [expandedSite, setExpandedSite] = useState<string | null>(null);
   const [previewSite, setPreviewSite] = useState<Site | null>(null);
   const [previewData, setPreviewData] = useState<Record<string, string>>({});
+  const [editSiteData, setEditSiteData] = useState<Site | null>(null);
   // geoRoleEdits: siteId -> { fieldName -> geoRole }
   const [geoRoleEdits, setGeoRoleEdits] = useState<Record<string, Record<string, "zip" | "state" | "county" | null>>>({});
   // noteEdits: siteId -> note text
@@ -141,6 +142,23 @@ export function SitesTab() {
     },
     onError: (err: any) => {
       toast({ title: "Save failed", description: String(err?.message || err), variant: "destructive" });
+    },
+  });
+
+  const updateSiteMutation = useMutation({
+    mutationFn: async (data: Site) => {
+      const res = await apiRequest("PUT", `/api/sites/${data.id}`, Object.assign({}, data, {
+        fields: data.fields
+      }));
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sites"] });
+      setEditSiteData(null);
+      toast({ title: "Site updated successfully" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -407,6 +425,15 @@ export function SitesTab() {
                       <Button
                         size="icon"
                         variant="ghost"
+                        onClick={() => setEditSiteData(JSON.parse(JSON.stringify(site)))}
+                        title="Edit Site Configuration"
+                        data-testid={`button-edit-site-${site.id}`}
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
                         onClick={() => deleteMutation.mutate(site.id)}
                         data-testid={`button-delete-site-${site.id}`}
                       >
@@ -548,6 +575,132 @@ export function SitesTab() {
           <div className="flex justify-end pt-2">
             <Button variant="secondary" onClick={() => setPreviewSite(null)}>Close Preview</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editSiteData} onOpenChange={(open) => !open && setEditSiteData(null)}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+             <DialogTitle className="flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-primary" />
+                Edit Site Configuration
+             </DialogTitle>
+          </DialogHeader>
+          
+          {editSiteData && (
+             <div className="space-y-6 py-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                     <Label>Site Name</Label>
+                     <Input 
+                        value={editSiteData.name} 
+                        onChange={(e) => setEditSiteData({...editSiteData, name: e.target.value})} 
+                     />
+                  </div>
+                  <div className="space-y-2">
+                     <Label>Google Sheet Auth URL</Label>
+                     <Input 
+                        value={editSiteData.googleSheetUrl || ""} 
+                        onChange={(e) => setEditSiteData({...editSiteData, googleSheetUrl: e.target.value})} 
+                     />
+                  </div>
+                  <div className="space-y-2">
+                     <Label>Form Selector</Label>
+                     <Input 
+                        value={editSiteData.formSelector || ""} 
+                        onChange={(e) => setEditSiteData({...editSiteData, formSelector: e.target.value})} 
+                        className="font-mono text-sm"
+                     />
+                  </div>
+                  <div className="space-y-2">
+                     <Label>Submit Button Selector</Label>
+                     <Input 
+                        value={editSiteData.submitSelector || ""} 
+                        onChange={(e) => setEditSiteData({...editSiteData, submitSelector: e.target.value})} 
+                        className="font-mono text-sm"
+                        placeholder="button[type=submit], #submit-btn"
+                     />
+                     <p className="text-[10px] text-muted-foreground mt-1">If the Google Sheet save fails, ensure this hits the EXACT physical button (e.g., .hs-button) to trigger JS tracking scripts.</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                   <Label className="flex justify-between items-end">
+                      <span>Form Fields</span>
+                      <Button variant="outline" size="sm" onClick={() => {
+                        const fields = editSiteData.fields as FormField[] || [];
+                        setEditSiteData({
+                           ...editSiteData,
+                           fields: [...fields, { order: fields.length + 1, name: "new_field", label: "New Field", type: "text", selector: "", required: false }]
+                        })
+                      }}>+ Add Field</Button>
+                   </Label>
+                   <div className="rounded border bg-card p-0 overflow-x-auto">
+                      <Table>
+                         <TableHeader>
+                            <TableRow>
+                               <TableHead>Label</TableHead>
+                               <TableHead>Name</TableHead>
+                               <TableHead>Selector</TableHead>
+                               <TableHead className="w-24">Type</TableHead>
+                               <TableHead className="w-12">Req</TableHead>
+                               <TableHead className="w-12"></TableHead>
+                            </TableRow>
+                         </TableHeader>
+                         <TableBody>
+                            {(editSiteData.fields as FormField[])?.map((field, idx) => (
+                               <TableRow key={idx}>
+                                  <TableCell className="p-2"><Input value={field.label} onChange={(e) => {
+                                      const nf = [...(editSiteData.fields as FormField[])]; nf[idx].label = e.target.value; setEditSiteData({...editSiteData, fields: nf});
+                                  }} className="h-8 text-xs" /></TableCell>
+                                  <TableCell className="p-2"><Input value={field.name} onChange={(e) => {
+                                      const nf = [...(editSiteData.fields as FormField[])]; nf[idx].name = e.target.value; setEditSiteData({...editSiteData, fields: nf});
+                                  }} className="h-8 text-xs font-mono" /></TableCell>
+                                  <TableCell className="p-2"><Input value={field.selector} onChange={(e) => {
+                                      const nf = [...(editSiteData.fields as FormField[])]; nf[idx].selector = e.target.value; setEditSiteData({...editSiteData, fields: nf});
+                                  }} className="h-8 text-xs font-mono" /></TableCell>
+                                  <TableCell className="p-2">
+                                     <Select value={field.type} onValueChange={(v) => {
+                                         const nf = [...(editSiteData.fields as FormField[])]; nf[idx].type = v; setEditSiteData({...editSiteData, fields: nf});
+                                     }}>
+                                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                           <SelectItem value="text">Text</SelectItem>
+                                           <SelectItem value="email">Email</SelectItem>
+                                           <SelectItem value="tel">Tel</SelectItem>
+                                           <SelectItem value="number">Number</SelectItem>
+                                           <SelectItem value="select">Select</SelectItem>
+                                           <SelectItem value="radio">Radio</SelectItem>
+                                           <SelectItem value="checkbox">Checkbox</SelectItem>
+                                        </SelectContent>
+                                     </Select>
+                                  </TableCell>
+                                  <TableCell className="p-2 text-center">
+                                     <input type="checkbox" checked={field.required} onChange={(e) => {
+                                         const nf = [...(editSiteData.fields as FormField[])]; nf[idx].required = e.target.checked; setEditSiteData({...editSiteData, fields: nf});
+                                     }} className="w-4 h-4 cursor-pointer" />
+                                  </TableCell>
+                                  <TableCell className="p-2 text-right">
+                                     <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => {
+                                         const nf = [...(editSiteData.fields as FormField[])]; nf.splice(idx, 1); setEditSiteData({...editSiteData, fields: nf});
+                                     }}><Trash2 className="w-4 h-4" /></Button>
+                                  </TableCell>
+                               </TableRow>
+                            ))}
+                         </TableBody>
+                      </Table>
+                   </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4 border-t">
+                  <Button variant="outline" onClick={() => setEditSiteData(null)}>Cancel</Button>
+                  <Button disabled={updateSiteMutation.isPending} onClick={() => updateSiteMutation.mutate(editSiteData)}>
+                    {updateSiteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                    Save Changes
+                  </Button>
+                </div>
+             </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
