@@ -121,6 +121,14 @@ function extractGeoTargets(formData: Record<string, string>, fields?: import("@s
     country = "us"; // Default country fallback
   }
 
+  // Normalize state to 2-letter code if possible
+  if (state) {
+    const code = lookupStateCode(state);
+    if (code) {
+      state = code;
+    }
+  }
+
   return { zip, state, county, country };
 }
 
