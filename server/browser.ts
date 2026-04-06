@@ -42,22 +42,22 @@ async function typeHumanLike(page: any, value: string): Promise<void> {
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
 
-    // Occasional thinking pause (≈7% chance) — user hesitates mid-word
-    if (i > 0 && Math.random() < 0.07) {
-      await sleep(randomDelay(400, 1200));
+    // Occasional thinking pause (≈3% chance) — rare hesitation to stay fast
+    if (i > 0 && Math.random() < 0.03) {
+      await sleep(randomDelay(200, 500));
     }
 
     // Slight burst speed for common letter pairs (bigrams) — feels natural
     const prevCh = i > 0 ? value[i - 1] : '';
     const isBigram = prevCh && prevCh !== ' ' && ch !== ' ';
     const keystrokeDelay = isBigram
-      ? randomDelay(60, 160)   // fast inside a word
-      : randomDelay(120, 320); // slower at spaces / word boundaries
+      ? randomDelay(40, 100)   // fast inside a word
+      : randomDelay(80, 180);  // slightly slower at spaces / word boundaries
 
     await page.keyboard.type(ch, { delay: keystrokeDelay });
   }
-  // Short pause after finishing the value — like lifting fingers off keyboard
-  await sleep(randomDelay(150, 400));
+  // Brief pause after finishing the value
+  await sleep(randomDelay(80, 200));
 }
 
 /**
@@ -74,13 +74,13 @@ async function humanMouseMove(page: any, elementHandle: any): Promise<void> {
     const targetY = box.y + box.height * (0.2 + Math.random() * 0.6);
 
     // Approach from a random nearby starting offset
-    const startX = targetX + randomDelay(-80, 80);
-    const startY = targetY + randomDelay(-40, 40);
+    const startX = targetX + randomDelay(-60, 60);
+    const startY = targetY + randomDelay(-30, 30);
 
     await page.mouse.move(startX, startY);
-    await sleep(randomDelay(40, 120));
-    await page.mouse.move(targetX, targetY, { steps: randomDelay(6, 14) });
-    await sleep(randomDelay(60, 200));
+    await sleep(randomDelay(20, 60));
+    await page.mouse.move(targetX, targetY, { steps: randomDelay(4, 8) });
+    await sleep(randomDelay(30, 90));
   } catch {
     // Non-fatal — continue without mouse simulation
   }
@@ -96,7 +96,7 @@ async function humanScrollTo(page: any, selector: string): Promise<void> {
       const el = document.querySelector(sel);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, selector);
-    await sleep(randomDelay(200, 600));
+    await sleep(randomDelay(100, 250));
   } catch {
     // Ignore
   }
@@ -150,8 +150,8 @@ async function fillFieldHuman(
 ): Promise<void> {
   await humanScrollTo(page, selector);
 
-  // Wait a beat as if the user is reading the label
-  await sleep(randomDelay(300, 800));
+  // Pause as if the user is reading the label before typing
+  await sleep(randomDelay(200, 500));
 
   const handle = await page.$(selector);
   if (handle) {
@@ -159,12 +159,12 @@ async function fillFieldHuman(
   }
 
   // Click to focus (triple-click selects existing text)
-  await page.click(selector, { clickCount: 3, delay: randomDelay(40, 80) });
-  await sleep(randomDelay(100, 250));
+  await page.click(selector, { clickCount: 3, delay: randomDelay(25, 60) });
+  await sleep(randomDelay(80, 200));
 
   // Delete any pre-filled value
   await page.keyboard.press('Backspace');
-  await sleep(randomDelay(60, 150));
+  await sleep(randomDelay(40, 100));
 
   // Type human-like
   try {
@@ -183,7 +183,7 @@ async function fillFieldHuman(
       el?.blur();
     }, selector);
   }
-  await sleep(randomDelay(100, 300));
+  await sleep(randomDelay(80, 180));
 }
 
 /**
@@ -582,12 +582,12 @@ export async function autoFillForm(
           }
         } else if (field.type === "select") {
           await humanScrollTo(page, field.selector);
-          await sleep(randomDelay(300, 700));
+          await sleep(randomDelay(200, 500));
           const selHandle = await page.$(field.selector);
           if (selHandle) await humanMouseMove(page, selHandle);
           await page.waitForSelector(field.selector, { timeout: 8000 });
           await fillSelectNative(page, field.selector, value);
-          await sleep(randomDelay(400, 900));
+          await sleep(randomDelay(300, 700));
         } else {
           await page.waitForSelector(field.selector, { timeout: 8000 });
 
@@ -597,7 +597,7 @@ export async function autoFillForm(
           } catch {
             // Last-ditch fallback: native value setter
             await fillInputNative(page, field.selector, value);
-            await sleep(randomDelay(300, 600));
+            await sleep(randomDelay(200, 450));
           }
         }
       } catch (fieldErr: any) {
@@ -611,25 +611,24 @@ export async function autoFillForm(
         });
       }
 
-      // Human inter-field pause — varies based on field position
-      // First few fields: shorter pause (getting into a rhythm)
-      // Later fields: slightly longer (fatigue / reading carefully)
-      const baseDelay = i < 3 ? randomDelay(800, 1800) : randomDelay(1200, 2800);
+      // Inter-field pause — calibrated to hit ~30s total for an 8–12 field form
+      // First 3 fields: settling into rhythm; later fields: slightly more deliberate
+      const baseDelay = i < 3 ? randomDelay(800, 1500) : randomDelay(1000, 2000);
       await sleep(baseDelay);
     }
 
     onProgress({ step: "fields_complete", detail: "All fields saved", percent: 82, timestamp: Date.now() });
     checkAbort();
 
-    // Human review pause — user scrolls back up and re-reads before submitting
-    await sleep(randomDelay(2000, 4500));
+    // Review pause before submit — user glances over the filled form
+    await sleep(randomDelay(1000, 2000));
 
-    // Occasionally scroll back to the top as if reviewing
-    if (Math.random() < 0.5) {
+    // Occasionally do a quick scroll-up review (35% chance)
+    if (Math.random() < 0.35) {
       await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-      await sleep(randomDelay(800, 1800));
+      await sleep(randomDelay(400, 800));
       await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
-      await sleep(randomDelay(600, 1200));
+      await sleep(randomDelay(300, 600));
     }
 
     onProgress({ step: "submitting", detail: "Submitting", percent: 85, timestamp: Date.now() });

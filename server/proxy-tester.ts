@@ -207,7 +207,7 @@ async function testProxy(host: string, port: number, user: string, pass: string,
                 headers: {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 },
-                timeout: 15000,
+                timeout: 8000,
             });
             console.log(`[proxy-tester] Proxy test SUCCEEDED for ${user} via ${url}`);
             return true;
