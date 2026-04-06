@@ -560,14 +560,24 @@ export async function autoFillForm(
               await page.waitForSelector(field.selector, { timeout: 8000 });
               const isChecked = await page.$eval(field.selector, (el: any) => el.checked);
               if (!isChecked) {
+                // Scroll into view + mouse move so TrustedForm records a real pointer interaction
+                await humanScrollTo(page, field.selector);
+                await sleep(randomDelay(150, 350));
+                const cbHandle = await page.$(field.selector);
+                if (cbHandle) await humanMouseMove(page, cbHandle);
                 await page.click(field.selector);
+                await sleep(randomDelay(100, 250));
               }
             } catch {
-              // Try by value attribute fallback
+              // Fallback: try by value attribute
               const altSel = `input[type="checkbox"][value="${field.options?.[0] || value}"]`;
               try {
                 await page.waitForSelector(altSel, { timeout: 3000 });
+                await humanScrollTo(page, altSel);
+                const cbAltHandle = await page.$(altSel);
+                if (cbAltHandle) await humanMouseMove(page, cbAltHandle);
                 await page.click(altSel);
+                await sleep(randomDelay(100, 250));
               } catch { }
             }
           }
@@ -575,10 +585,23 @@ export async function autoFillForm(
           const radioSelector = `input[name="${field.name}"][value="${value}"]`;
           try {
             await page.waitForSelector(radioSelector, { timeout: 8000 });
+            // Scroll + mouse move before clicking so TrustedForm records the interaction
+            await humanScrollTo(page, radioSelector);
+            await sleep(randomDelay(150, 350));
+            const radioHandle = await page.$(radioSelector);
+            if (radioHandle) await humanMouseMove(page, radioHandle);
             await page.click(radioSelector);
+            await sleep(randomDelay(100, 250));
           } catch {
+            // Fallback: try generic radio selector with same value
             const altSel = `input[type="radio"][value="${value}"]`;
-            try { await page.click(altSel); } catch { }
+            try {
+              await humanScrollTo(page, altSel);
+              const altHandle = await page.$(altSel);
+              if (altHandle) await humanMouseMove(page, altHandle);
+              await page.click(altSel);
+              await sleep(randomDelay(100, 250));
+            } catch { }
           }
         } else if (field.type === "select") {
           await humanScrollTo(page, field.selector);
