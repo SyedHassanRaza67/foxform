@@ -34,6 +34,74 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Types a string character-by-character with human-like variable delays.
+ * Includes occasional "thinking pauses" to mimic real user behaviour.
+ */
+async function typeHumanLike(page: any, value: string): Promise<void> {
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+
+    // Occasional thinking pause (≈7% chance) — user hesitates mid-word
+    if (i > 0 && Math.random() < 0.07) {
+      await sleep(randomDelay(400, 1200));
+    }
+
+    // Slight burst speed for common letter pairs (bigrams) — feels natural
+    const prevCh = i > 0 ? value[i - 1] : '';
+    const isBigram = prevCh && prevCh !== ' ' && ch !== ' ';
+    const keystrokeDelay = isBigram
+      ? randomDelay(60, 160)   // fast inside a word
+      : randomDelay(120, 320); // slower at spaces / word boundaries
+
+    await page.keyboard.type(ch, { delay: keystrokeDelay });
+  }
+  // Short pause after finishing the value — like lifting fingers off keyboard
+  await sleep(randomDelay(150, 400));
+}
+
+/**
+ * Moves the mouse to a random point near the element centre before interacting.
+ * Simulates natural cursor movement so bot-detection heuristics see pointer activity.
+ */
+async function humanMouseMove(page: any, elementHandle: any): Promise<void> {
+  try {
+    const box = await elementHandle.boundingBox();
+    if (!box) return;
+
+    // Land somewhere within the middle 60% of the element
+    const targetX = box.x + box.width  * (0.2 + Math.random() * 0.6);
+    const targetY = box.y + box.height * (0.2 + Math.random() * 0.6);
+
+    // Approach from a random nearby starting offset
+    const startX = targetX + randomDelay(-80, 80);
+    const startY = targetY + randomDelay(-40, 40);
+
+    await page.mouse.move(startX, startY);
+    await sleep(randomDelay(40, 120));
+    await page.mouse.move(targetX, targetY, { steps: randomDelay(6, 14) });
+    await sleep(randomDelay(60, 200));
+  } catch {
+    // Non-fatal — continue without mouse simulation
+  }
+}
+
+/**
+ * Scrolls the element into view with a small random offset and waits briefly,
+ * mimicking a human pausing to read the field before typing.
+ */
+async function humanScrollTo(page: any, selector: string): Promise<void> {
+  try {
+    await page.evaluate((sel: string) => {
+      const el = document.querySelector(sel);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, selector);
+    await sleep(randomDelay(200, 600));
+  } catch {
+    // Ignore
+  }
+}
+
 async function fillInputNative(page: any, selector: string, value: string): Promise<void> {
   await page.evaluate((sel: string, val: string) => {
     const el = document.querySelector(sel) as HTMLInputElement | HTMLTextAreaElement | null;
@@ -63,6 +131,59 @@ async function fillInputNative(page: any, selector: string, value: string): Prom
     el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
   }, selector, value);
+}
+
+/**
+ * Human-like text field fill strategy:
+ *  1. Scroll the field into view and pause (reading)
+ *  2. Move the mouse to the field naturally
+ *  3. Click to focus
+ *  4. Select-all + delete any existing value
+ *  5. Type character-by-character with variable delays
+ *  6. Blur the field
+ * Falls back to fillInputNative if keyboard typing fails.
+ */
+async function fillFieldHuman(
+  page: any,
+  selector: string,
+  value: string
+): Promise<void> {
+  await humanScrollTo(page, selector);
+
+  // Wait a beat as if the user is reading the label
+  await sleep(randomDelay(300, 800));
+
+  const handle = await page.$(selector);
+  if (handle) {
+    await humanMouseMove(page, handle);
+  }
+
+  // Click to focus (triple-click selects existing text)
+  await page.click(selector, { clickCount: 3, delay: randomDelay(40, 80) });
+  await sleep(randomDelay(100, 250));
+
+  // Delete any pre-filled value
+  await page.keyboard.press('Backspace');
+  await sleep(randomDelay(60, 150));
+
+  // Type human-like
+  try {
+    await typeHumanLike(page, value);
+  } catch {
+    // Fallback: native setter for React-controlled inputs
+    await fillInputNative(page, selector, value);
+  }
+
+  // Tab away or blur — like pressing Tab to move to the next field
+  if (Math.random() < 0.6) {
+    await page.keyboard.press('Tab');
+  } else {
+    await page.evaluate((sel: string) => {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      el?.blur();
+    }, selector);
+  }
+  await sleep(randomDelay(100, 300));
 }
 
 /**
@@ -460,23 +581,24 @@ export async function autoFillForm(
             try { await page.click(altSel); } catch { }
           }
         } else if (field.type === "select") {
+          await humanScrollTo(page, field.selector);
+          await sleep(randomDelay(300, 700));
+          const selHandle = await page.$(field.selector);
+          if (selHandle) await humanMouseMove(page, selHandle);
           await page.waitForSelector(field.selector, { timeout: 8000 });
           await fillSelectNative(page, field.selector, value);
+          await sleep(randomDelay(400, 900));
         } else {
           await page.waitForSelector(field.selector, { timeout: 8000 });
 
-          // First attempt: use native value setter (works for React forms)
+          // Human-like fill: scroll → mouse move → click → type char-by-char
           try {
-            await fillInputNative(page, field.selector, value);
+            await fillFieldHuman(page, field.selector, value);
           } catch {
-            // Fallback: click and type character by character
-            await page.click(field.selector, { clickCount: 3 });
-            await sleep(100);
-            await page.keyboard.type(value, { delay: randomDelay(40, 90) });
+            // Last-ditch fallback: native value setter
+            await fillInputNative(page, field.selector, value);
+            await sleep(randomDelay(300, 600));
           }
-
-          // Fast navigation: Reduced sleep after successful load
-          await sleep(randomDelay(200, 500));
         }
       } catch (fieldErr: any) {
         const label = field.label || field.name || "(unknown field)";
@@ -489,12 +611,26 @@ export async function autoFillForm(
         });
       }
 
-      await sleep(randomDelay(300, 600)); // Reduced delay — still human-like but 4× faster
+      // Human inter-field pause — varies based on field position
+      // First few fields: shorter pause (getting into a rhythm)
+      // Later fields: slightly longer (fatigue / reading carefully)
+      const baseDelay = i < 3 ? randomDelay(800, 1800) : randomDelay(1200, 2800);
+      await sleep(baseDelay);
     }
 
     onProgress({ step: "fields_complete", detail: "All fields saved", percent: 82, timestamp: Date.now() });
     checkAbort();
-    await sleep(randomDelay(800, 1500));
+
+    // Human review pause — user scrolls back up and re-reads before submitting
+    await sleep(randomDelay(2000, 4500));
+
+    // Occasionally scroll back to the top as if reviewing
+    if (Math.random() < 0.5) {
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      await sleep(randomDelay(800, 1800));
+      await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+      await sleep(randomDelay(600, 1200));
+    }
 
     onProgress({ step: "submitting", detail: "Submitting", percent: 85, timestamp: Date.now() });
 
@@ -830,6 +966,11 @@ export async function extractTrustedFormData(
 ): Promise<Record<string, string>> {
   let browser: any = null;
   try {
+    const { default: puppeteerExtra } = await import("puppeteer-extra");
+    const { default: StealthPlugin } = await import("puppeteer-extra-plugin-stealth");
+    const { default: puppeteer } = await import("puppeteer");
+    puppeteerExtra.use(StealthPlugin());
+
     const launchArgs = [
       "--no-sandbox",
       "--disable-setuid-sandbox",
