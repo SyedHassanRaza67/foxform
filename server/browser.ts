@@ -703,6 +703,50 @@ export async function autoFillForm(
 
         let clickFired = false;
 
+        const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
+          try {
+            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+            await sleep(randomDelay(200, 500));
+            
+            // First try CDP click which guarantees isTrusted=true and checks if element is clickable
+            await humanMouseMove(page, elHandle);
+            await elHandle.click({ delay: randomDelay(40, 100) });
+            console.log(`[browser] Clicked submit via strictly physical pointer path (${context})`);
+            return true;
+          } catch (mouseErr) {
+            // It might be covered or not fully visible. Try direct coordinate click without visibility check.
+            try {
+               const box = await elHandle.boundingBox();
+               if (box) {
+                 await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+                 await page.mouse.down();
+                 await sleep(randomDelay(50, 100));
+                 await page.mouse.up();
+                 console.log(`[browser] Clicked submit via forced coordinate click (${context})`);
+                 return true;
+               }
+            } catch { }
+
+            // Final fallback to JS click AND dispatching pointer events to trick basic plugins
+            const ok = await page.evaluate((node: Element) => {
+              const el = node as HTMLElement;
+              const evtOpts = { bubbles: true, cancelable: true, view: window };
+              el.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
+              el.dispatchEvent(new MouseEvent('mousedown', evtOpts));
+              el.dispatchEvent(new MouseEvent('pointerup', evtOpts));
+              el.dispatchEvent(new MouseEvent('mouseup', evtOpts));
+              el.click(); // the actual JS click
+              return true;
+            }, elHandle).catch(() => false);
+
+            if (ok) {
+              console.log(`[browser] Clicked submit via simulated JS pointer events (${context})`);
+              return true;
+            }
+            return false;
+          }
+        };
+
         // --- Step 1: Try standard CSS selectors (instant page.$, no timeout waste) ---
         for (const sel of standardSelectors) {
           try {
@@ -714,25 +758,8 @@ export async function autoFillForm(
             }
 
             if (el) {
-              await el.evaluate((node: Element) => node.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-              await sleep(randomDelay(200, 500));
-              
-              // Human-like physical click so trackers register real pointer intent
-              try {
-                await humanMouseMove(page, el);
-                await el.click({ delay: randomDelay(40, 100) });
-                clickFired = true;
-                console.log(`[browser] Clicked submit via strictly physical pointer path: ${sel}`);
-                break;
-              } catch (mouseErr) {
-                 // Fallback to evaluating JS click if physical click fails (e.g., hidden element or covered)
-                 const ok = await page.evaluate((node: Element) => { (node as HTMLElement).click(); return true; }, el).catch(() => false);
-                 if (ok) {
-                   clickFired = true;
-                   console.log(`[browser] Clicked submit via JS click: ${sel}`);
-                   break;
-                 }
-              }
+              clickFired = await attemptTrustedClick(el, `CSS: ${sel}`);
+              if (clickFired) break;
             }
           } catch { }
         }
@@ -743,7 +770,7 @@ export async function autoFillForm(
             "submit", "send", "get quote", "get started", "continue",
             "next", "apply", "free", "start", "go", "request", "confirm", "done"
           ];
-          const jsClickOk = await page.evaluate((texts: string[]) => {
+          const elHandle = await page.evaluateHandle((texts: string[]) => {
             const candidates = Array.from(document.querySelectorAll(
               'button, input[type="button"], input[type="submit"], a[role="button"], [role="button"]'
             )) as HTMLElement[];
@@ -752,27 +779,21 @@ export async function autoFillForm(
               const r = el.getBoundingClientRect();
               return r.width > 0 && r.height > 0 && !(el as HTMLButtonElement).disabled;
             });
-            const found = visible.find(el => {
+            return visible.find(el => {
               const text = (el.textContent || (el as HTMLInputElement).value || "").toLowerCase().trim();
               return texts.some(st => text.includes(st));
-            });
-            if (found) {
-              found.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              found.click();
-              return true;
-            }
-            return false;
-          }, submitTexts).catch(() => false);
+            }) || null;
+          }, submitTexts);
 
-          if (jsClickOk) {
-            clickFired = true;
-            console.log(`[browser] Clicked submit via JS text search`);
+          const el = elHandle.asElement();
+          if (el) {
+            clickFired = await attemptTrustedClick(el, "JS text search");
           }
         }
 
         // --- Step 3: Last resort A — click the last visible button or submit the form ---
         if (!clickFired) {
-          const lastResortOk = await page.evaluate(() => {
+          const elHandle = await page.evaluateHandle(() => {
             const allBtns = Array.from(document.querySelectorAll(
               'button:not([disabled]), input[type="submit"]:not([disabled])'
             )) as HTMLElement[];
@@ -780,47 +801,19 @@ export async function autoFillForm(
               const r = el.getBoundingClientRect();
               return r.width > 0 && r.height > 0;
             });
-            if (visible.length > 0) {
-              const target = visible[visible.length - 1];
-              target.scrollIntoView({ block: 'center' });
-              target.click();
-              return true;
-            }
-            return false;
-          }).catch(() => false);
+            return visible.length > 0 ? visible[visible.length - 1] : null;
+          });
 
-          if (lastResortOk) {
-            clickFired = true;
-            console.log(`[browser] Clicked submit via last-resort button click`);
+          const el = elHandle.asElement();
+          if (el) {
+            clickFired = await attemptTrustedClick(el, "Last resort visible button");
           }
         }
 
-        // --- Step 3B: Last resort B — form.requestSubmit() (triggers native HTML5 validation + submit) ---
         if (!clickFired) {
-          console.warn("[browser] WARNING: Could not click a physical submit button. Bypassing UI and using form.requestSubmit(). This MAY cause backend save scripts (like Google Sheets) to fail!");
-          onProgress({ step: "field_warning", detail: "Used fallback submit. Google Sheet saving may fail.", percent: 85 + attempt, timestamp: Date.now() });
-          
-          const requestSubmitOk = await page.evaluate(() => {
-            const form = document.querySelector('form') as HTMLFormElement | null;
-            if (form && typeof form.requestSubmit === 'function') {
-              form.requestSubmit();
-              return true;
-            }
-            if (form) {
-              form.submit();
-              return true;
-            }
-            return false;
-          }).catch(() => false);
-
-          if (requestSubmitOk) {
-            clickFired = true;
-            console.log(`[browser] Submitted via form.requestSubmit()`);
-          } else {
-            console.warn(`[browser] Submit attempt ${attempt}: no clickable button or form found`);
-            await sleep(2000);
-            continue;
-          }
+          console.warn(`[browser] Submit attempt ${attempt}: no clickable button or form found, skipping fallback submit to ensure plugins trigger`);
+          await sleep(2000);
+          continue;
         }
 
         if (clickFired) totalClicksFired++;
