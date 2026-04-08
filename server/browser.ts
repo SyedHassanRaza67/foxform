@@ -94,7 +94,7 @@ async function humanScrollTo(page: any, selector: string): Promise<void> {
   try {
     await page.evaluate((sel: string) => {
       const el = document.querySelector(sel);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (el) el.scrollIntoView({ behavior: 'auto', block: 'center' }); // Use auto to prevent bounding box animation drift
     }, selector);
     await sleep(randomDelay(100, 250));
   } catch {
@@ -705,30 +705,34 @@ export async function autoFillForm(
 
         const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
           try {
-            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-            await sleep(randomDelay(200, 500));
+            // Use 'auto' instead of 'smooth' so the element is instantly placed at final coordinates
+            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
+            await sleep(randomDelay(400, 800)); // Let the page fully settle
             
-            // First try CDP click which guarantees isTrusted=true and checks if element is clickable
-            await humanMouseMove(page, elHandle);
-            await elHandle.click({ delay: randomDelay(40, 100) });
-            console.log(`[browser] Clicked submit via strictly physical pointer path (${context})`);
-            return true;
+            const box = await elHandle.boundingBox();
+            if (box && box.width > 0 && box.height > 0) {
+               // Calculate center exactly
+               const targetX = box.x + box.width / 2;
+               const targetY = box.y + box.height / 2;
+               
+               // Move mouse properly to center
+               await page.mouse.move(targetX, targetY, { steps: randomDelay(5, 10) });
+               await sleep(randomDelay(50, 100));
+               
+               // Dispatch EXACTLY 1 physical click using CDP native API
+               await page.mouse.down();
+               await sleep(randomDelay(60, 120));
+               await page.mouse.up();
+               
+               console.log(`[browser] Clicked submit via strictly physical page.mouse pointer path (${context})`);
+               return true;
+            }
           } catch (mouseErr) {
-            // It might be covered or not fully visible. Try direct coordinate click without visibility check.
-            try {
-               const box = await elHandle.boundingBox();
-               if (box) {
-                 await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-                 await page.mouse.down();
-                 await sleep(randomDelay(50, 100));
-                 await page.mouse.up();
-                 console.log(`[browser] Clicked submit via forced coordinate click (${context})`);
-                 return true;
-               }
-            } catch { }
+            console.warn(`[browser] Physical mouse click failed (${context}), falling back to synthetic event`, mouseErr);
+          }
 
-            // Final fallback to JS click AND dispatching pointer events to trick basic plugins
-            const ok = await page.evaluate((node: Element) => {
+          // Final fallback to JS click AND dispatching pointer events to trick basic plugins
+          const ok = await page.evaluate((node: Element) => {
               const el = node as HTMLElement;
               const evtOpts = { bubbles: true, cancelable: true, view: window };
               el.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
