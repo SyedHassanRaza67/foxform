@@ -362,6 +362,16 @@ export async function autoFillForm(
 
     page = await browser.newPage();
     console.log(`[browser] New page created, navigating to ${url}`);
+    
+    // Timezone emulation: Force normal US timezone so TrustedForm and server analytics record it as live US time
+    const usTimezones = [
+      'America/New_York', 
+      'America/Chicago', 
+      'America/Denver', 
+      'America/Los_Angeles'
+    ];
+    await page.emulateTimezone(usTimezones[Math.floor(Math.random() * usTimezones.length)]);
+    
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -552,31 +562,77 @@ export async function autoFillForm(
         timestamp: Date.now(),
       });
 
+      const clickFieldHumanLocal = async (selectorLocal: string): Promise<boolean> => {
+        await humanScrollTo(page, selectorLocal);
+        const elHandle = await page.$(selectorLocal);
+        if (elHandle) {
+          try {
+            const box = await elHandle.boundingBox();
+            if (box && box.width > 0 && box.height > 0) {
+              const targetX = box.x + box.width / 2;
+              const targetY = box.y + box.height / 2;
+              await page.mouse.move(targetX, targetY, { steps: randomDelay(5, 10) });
+              await sleep(randomDelay(40, 80));
+              await page.mouse.down();
+              await sleep(randomDelay(50, 100));
+              await page.mouse.up();
+              return true;
+            }
+          } catch { }
+        }
+
+        const labelHandle = await page.evaluateHandle((sel: string) => {
+          const el = document.querySelector(sel) as HTMLInputElement;
+          if (!el) return null;
+          if (el.labels && el.labels.length > 0) return el.labels[0];
+          if (el.id) {
+            const lbl = document.querySelector(`label[for="${el.id}"]`);
+            if (lbl) return lbl;
+          }
+          return el.closest('label') || el.parentElement;
+        }, selectorLocal);
+
+        const labelEl = labelHandle.asElement();
+        if (labelEl) {
+          try {
+            const lbox = await labelEl.boundingBox();
+            if (lbox && lbox.width > 0 && lbox.height > 0) {
+              const targetX = lbox.x + lbox.width / 2;
+              const targetY = lbox.y + lbox.height / 2;
+              await page.mouse.move(targetX, targetY, { steps: randomDelay(5, 10) });
+              await sleep(randomDelay(40, 80));
+              await page.mouse.down();
+              await sleep(randomDelay(50, 100));
+              await page.mouse.up();
+              return true;
+            }
+          } catch { }
+        }
+
+        return await page.evaluate((sel: string) => {
+          const el = document.querySelector(sel) as HTMLElement;
+          if (el) { el.click(); return true; }
+          return false;
+        }, selectorLocal).catch(() => false);
+      };
+
       try {
         if (field.type === "checkbox") {
           const shouldCheck = value === "true" || value === "1" || value === "on" || (field.options && field.options.includes(value));
+
           if (shouldCheck) {
             try {
               await page.waitForSelector(field.selector, { timeout: 8000 });
               const isChecked = await page.$eval(field.selector, (el: any) => el.checked);
               if (!isChecked) {
-                // Scroll into view + mouse move so TrustedForm records a real pointer interaction
-                await humanScrollTo(page, field.selector);
-                await sleep(randomDelay(150, 350));
-                const cbHandle = await page.$(field.selector);
-                if (cbHandle) await humanMouseMove(page, cbHandle);
-                await page.click(field.selector);
+                await clickFieldHumanLocal(field.selector);
                 await sleep(randomDelay(100, 250));
               }
             } catch {
-              // Fallback: try by value attribute
               const altSel = `input[type="checkbox"][value="${field.options?.[0] || value}"]`;
               try {
                 await page.waitForSelector(altSel, { timeout: 3000 });
-                await humanScrollTo(page, altSel);
-                const cbAltHandle = await page.$(altSel);
-                if (cbAltHandle) await humanMouseMove(page, cbAltHandle);
-                await page.click(altSel);
+                await clickFieldHumanLocal(altSel);
                 await sleep(randomDelay(100, 250));
               } catch { }
             }
@@ -585,31 +641,37 @@ export async function autoFillForm(
           const radioSelector = `input[name="${field.name}"][value="${value}"]`;
           try {
             await page.waitForSelector(radioSelector, { timeout: 8000 });
-            // Scroll + mouse move before clicking so TrustedForm records the interaction
-            await humanScrollTo(page, radioSelector);
-            await sleep(randomDelay(150, 350));
-            const radioHandle = await page.$(radioSelector);
-            if (radioHandle) await humanMouseMove(page, radioHandle);
-            await page.click(radioSelector);
+            await clickFieldHumanLocal(radioSelector);
             await sleep(randomDelay(100, 250));
           } catch {
-            // Fallback: try generic radio selector with same value
             const altSel = `input[type="radio"][value="${value}"]`;
             try {
-              await humanScrollTo(page, altSel);
-              const altHandle = await page.$(altSel);
-              if (altHandle) await humanMouseMove(page, altHandle);
-              await page.click(altSel);
+              await clickFieldHumanLocal(altSel);
               await sleep(randomDelay(100, 250));
             } catch { }
           }
         } else if (field.type === "select") {
-          await humanScrollTo(page, field.selector);
-          await sleep(randomDelay(200, 500));
-          const selHandle = await page.$(field.selector);
-          if (selHandle) await humanMouseMove(page, selHandle);
           await page.waitForSelector(field.selector, { timeout: 8000 });
+          
+          // Force a physical click on the dropdown itself so TrustedForm knows the user actively interacted
+          await humanScrollTo(page, field.selector);
+          const selHandle = await page.$(field.selector);
+          if (selHandle) {
+             const box = await selHandle.boundingBox();
+             if (box && box.width > 0 && box.height > 0) {
+               await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: randomDelay(4, 8) });
+               await page.mouse.down();
+               await sleep(randomDelay(50, 90));
+               await page.mouse.up();
+             }
+          }
+          await sleep(randomDelay(300, 500)); // wait for dropdown to open visually
+          
+          // Now apply value natively
           await fillSelectNative(page, field.selector, value);
+          
+          // Tap 'Escape' or 'Tab' to close the native overlay cleanly
+          await page.keyboard.press('Escape');
           await sleep(randomDelay(300, 700));
         } else {
           await page.waitForSelector(field.selector, { timeout: 8000 });
@@ -748,7 +810,6 @@ export async function autoFillForm(
               return true;
             }
             return false;
-          }
         };
 
         // --- Step 1: Try standard CSS selectors (instant page.$, no timeout waste) ---
