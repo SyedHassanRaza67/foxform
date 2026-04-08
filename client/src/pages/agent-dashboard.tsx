@@ -322,7 +322,7 @@ export default function AgentDashboard() {
                     </div>
                     <div className="min-w-0">
                       <p className="font-semibold truncate">{site.name}</p>
-                      <p className="text-xs text-muted-foreground truncate opacity-70">{siteFields.length} fields • {site.url}</p>
+                      <p className="text-xs text-muted-foreground truncate opacity-70">{siteFields.length} fields</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -346,9 +346,6 @@ export default function AgentDashboard() {
               <Globe className="w-5 h-5 text-primary" />
               <DialogTitle className="flex flex-col">
                 <span>{expandedSite?.name}</span>
-                <span className="text-[10px] text-muted-foreground font-normal uppercase tracking-tight opacity-70">
-                  {expandedSite?.url}
-                </span>
               </DialogTitle>
             </div>
           </DialogHeader>
