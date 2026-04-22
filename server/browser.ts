@@ -35,6 +35,81 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * US timezone pool — pick one randomly on each run so TrustedForm
+ * sees a realistic, varying US local time instead of the server's GMT+5.
+ */
+const US_TIMEZONES = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Phoenix',
+  'America/Detroit',
+  'America/Indiana/Indianapolis',
+];
+
+/**
+ * Apply a convincing US timezone to a Puppeteer page using every available
+ * spoofing layer so TrustedForm (and any other fingerprinting library) sees
+ * a real US local time:
+ *   1. Puppeteer's built-in emulateTimezone() — spoofs Date & toLocaleString
+ *   2. CDP Emulation.setTimezoneOverride — overrides the Blink-level TZ
+ *   3. evaluateOnNewDocument injection — overrides Intl.DateTimeFormat so
+ *      resolvedOptions().timeZone returns the chosen US zone in every frame
+ */
+async function applyUSTimezone(page: any): Promise<string> {
+  const tz = US_TIMEZONES[Math.floor(Math.random() * US_TIMEZONES.length)];
+
+  // Layer 1: Puppeteer emulateTimezone (Date API)
+  try {
+    await page.emulateTimezone(tz);
+  } catch (e: any) {
+    console.warn('[tz] emulateTimezone failed:', e?.message);
+  }
+
+  // Layer 2: CDP-level Blink timezone override (affects Intl internals too)
+  try {
+    const client = await page.target().createCDPSession();
+    await client.send('Emulation.setTimezoneOverride', { timezoneId: tz });
+  } catch (e: any) {
+    console.warn('[tz] CDP setTimezoneOverride failed:', e?.message);
+  }
+
+  // Layer 3: Inject Intl spoof before ANY page script runs
+  try {
+    await page.evaluateOnNewDocument((timezone: string) => {
+      // Override Intl.DateTimeFormat so resolvedOptions().timeZone is our US zone
+      const OriginalIntl = Intl.DateTimeFormat;
+      // @ts-ignore
+      Intl.DateTimeFormat = function (locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+        const mergedOptions = { timeZone: timezone, ...(options || {}) };
+        // @ts-ignore
+        return new OriginalIntl(locales, mergedOptions);
+      } as any;
+      // Copy static methods
+      Object.assign(Intl.DateTimeFormat, OriginalIntl);
+      (Intl.DateTimeFormat as any).prototype = OriginalIntl.prototype;
+
+      // Also spoof the raw getter used by some fingerprinters
+      try {
+        Object.defineProperty(Intl.DateTimeFormat.prototype, 'resolvedOptions', {
+          value: function () {
+            const orig = OriginalIntl.prototype.resolvedOptions.call(this);
+            return { ...orig, timeZone: timezone };
+          },
+          writable: true, configurable: true,
+        });
+      } catch { }
+    }, tz);
+  } catch (e: any) {
+    console.warn('[tz] evaluateOnNewDocument Intl spoof failed:', e?.message);
+  }
+
+  console.log(`[tz] Applied US timezone: ${tz}`);
+  return tz;
+}
+
+/**
  * Types a string character-by-character with human-like variable delays.
  * Includes occasional "thinking pauses" to mimic real user behaviour.
  */
@@ -362,16 +437,11 @@ export async function autoFillForm(
 
     page = await browser.newPage();
     console.log(`[browser] New page created, navigating to ${url}`);
-    
-    // Timezone emulation: Force normal US timezone so TrustedForm and server analytics record it as live US time
-    const usTimezones = [
-      'America/New_York', 
-      'America/Chicago', 
-      'America/Denver', 
-      'America/Los_Angeles'
-    ];
-    await page.emulateTimezone(usTimezones[Math.floor(Math.random() * usTimezones.length)]);
-    
+
+    // Apply full US timezone emulation (CDP + Intl + Date API) BEFORE navigation
+    // so TrustedForm script sees the correct US time from the very first tick.
+    await applyUSTimezone(page);
+
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -1082,6 +1152,11 @@ export async function extractTrustedFormData(
     });
 
     const page = await browser.newPage();
+
+    // Apply full US timezone emulation BEFORE navigation so TrustedForm
+    // records a US local time in the cert (not the server's GMT+5).
+    await applyUSTimezone(page);
+
     await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
