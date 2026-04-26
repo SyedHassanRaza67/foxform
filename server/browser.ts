@@ -117,22 +117,23 @@ async function typeHumanLike(page: any, value: string): Promise<void> {
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
 
-    // Occasional thinking pause (≈3% chance) — rare hesitation to stay fast
-    if (i > 0 && Math.random() < 0.03) {
-      await sleep(randomDelay(200, 500));
+    // Occasional thinking pause (≈8% chance) — natural hesitation mid-word
+    if (i > 0 && Math.random() < 0.08) {
+      await sleep(randomDelay(300, 700));
     }
 
-    // Slight burst speed for common letter pairs (bigrams) — feels natural
+    // Realistic per-keystroke delays — much closer to average human WPM (~40-60)
+    // Inside a word: 120–220ms; at spaces / punctuation: 180–300ms
     const prevCh = i > 0 ? value[i - 1] : '';
-    const isBigram = prevCh && prevCh !== ' ' && ch !== ' ';
-    const keystrokeDelay = isBigram
-      ? randomDelay(40, 100)   // fast inside a word
-      : randomDelay(80, 180);  // slightly slower at spaces / word boundaries
+    const isWordChar = prevCh && prevCh !== ' ' && ch !== ' ' && ch !== '.' && ch !== ',';
+    const keystrokeDelay = isWordChar
+      ? randomDelay(120, 220)   // mid-word characters
+      : randomDelay(180, 300);  // word boundaries / spaces / punctuation
 
     await page.keyboard.type(ch, { delay: keystrokeDelay });
   }
-  // Brief pause after finishing the value
-  await sleep(randomDelay(80, 200));
+  // Realistic post-field pause — user glances at what they typed
+  await sleep(randomDelay(200, 450));
 }
 
 /**
@@ -223,33 +224,40 @@ async function fillFieldHuman(
   selector: string,
   value: string
 ): Promise<void> {
+  // Step 1: Scroll the field into view so the user can see it
   await humanScrollTo(page, selector);
 
-  // Pause as if the user is reading the label before typing
-  await sleep(randomDelay(200, 500));
+  // Step 2: Pause — as if the user is reading the field label
+  await sleep(randomDelay(300, 700));
 
   const handle = await page.$(selector);
+
+  // Step 3: Move mouse naturally toward the field (visual tracking)
   if (handle) {
     await humanMouseMove(page, handle);
+    await sleep(randomDelay(100, 250)); // hover pause before clicking
   }
 
-  // Click to focus (triple-click selects existing text)
-  await page.click(selector, { clickCount: 3, delay: randomDelay(25, 60) });
-  await sleep(randomDelay(80, 200));
+  // Step 4: Click to focus the input (triple-click selects any existing text)
+  await page.click(selector, { clickCount: 3, delay: randomDelay(40, 80) });
+  await sleep(randomDelay(120, 280));
 
-  // Delete any pre-filled value
+  // Step 5: Clear any pre-filled value
   await page.keyboard.press('Backspace');
-  await sleep(randomDelay(40, 100));
+  await sleep(randomDelay(60, 130));
 
-  // Type human-like
+  // Step 6: Type character-by-character with realistic human speed
   try {
     await typeHumanLike(page, value);
   } catch {
-    // Fallback: native setter for React-controlled inputs
+    // Fallback: native value setter for React/Vue-controlled inputs
     await fillInputNative(page, selector, value);
   }
 
-  // Tab away or blur — like pressing Tab to move to the next field
+  // Step 7: Pause after typing — user re-reads what they just typed
+  await sleep(randomDelay(200, 500));
+
+  // Step 8: Tab away (or blur) to commit the value
   if (Math.random() < 0.6) {
     await page.keyboard.press('Tab');
   } else {
@@ -258,7 +266,7 @@ async function fillFieldHuman(
       el?.blur();
     }, selector);
   }
-  await sleep(randomDelay(80, 180));
+  await sleep(randomDelay(150, 300));
 }
 
 /**
@@ -722,27 +730,67 @@ export async function autoFillForm(
           }
         } else if (field.type === "select") {
           await page.waitForSelector(field.selector, { timeout: 8000 });
-          
-          // Force a physical click on the dropdown itself so TrustedForm knows the user actively interacted
+
+          // Step 1: Scroll into view, pause as if noticing the dropdown
           await humanScrollTo(page, field.selector);
+          await sleep(randomDelay(200, 450));
+
           const selHandle = await page.$(field.selector);
           if (selHandle) {
-             const box = await selHandle.boundingBox();
-             if (box && box.width > 0 && box.height > 0) {
-               await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: randomDelay(4, 8) });
-               await page.mouse.down();
-               await sleep(randomDelay(50, 90));
-               await page.mouse.up();
-             }
+            // Step 2: Move mouse naturally to the dropdown
+            await humanMouseMove(page, selHandle);
+            await sleep(randomDelay(100, 200)); // hover before clicking
+
+            const box = await selHandle.boundingBox();
+            if (box && box.width > 0 && box.height > 0) {
+              const cx = box.x + box.width / 2;
+              const cy = box.y + box.height / 2;
+
+              // Step 3: Click the dropdown to open it
+              await page.mouse.move(cx, cy, { steps: randomDelay(5, 10) });
+              await sleep(randomDelay(80, 150));
+              await page.mouse.down();
+              await sleep(randomDelay(80, 140));
+              await page.mouse.up();
+
+              // Step 4: Wait for the dropdown options to appear visually
+              await sleep(randomDelay(400, 700));
+
+              // Step 5: Try to click the matching <option> element in the open dropdown
+              const optionClicked = await page.evaluate(
+                (sel: string, val: string) => {
+                  const selectEl = document.querySelector(sel) as HTMLSelectElement | null;
+                  if (!selectEl) return false;
+                  const opt = Array.from(selectEl.options).find(
+                    (o) => o.value === val || o.text.trim().toLowerCase() === val.toLowerCase()
+                  );
+                  if (opt) {
+                    // Simulate a click on the option (works for native selects)
+                    opt.selected = true;
+                    selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                  }
+                  return false;
+                },
+                field.selector,
+                value
+              ).catch(() => false);
+
+              if (!optionClicked) {
+                // Fallback: use the native setter path
+                await fillSelectNative(page, field.selector, value);
+              }
+            } else {
+              // No bounding box — go straight to native
+              await fillSelectNative(page, field.selector, value);
+            }
+          } else {
+            await fillSelectNative(page, field.selector, value);
           }
-          await sleep(randomDelay(300, 500)); // wait for dropdown to open visually
-          
-          // Now apply value natively
-          await fillSelectNative(page, field.selector, value);
-          
-          // Tap 'Escape' or 'Tab' to close the native overlay cleanly
+
+          // Step 6: Close the dropdown cleanly
           await page.keyboard.press('Escape');
-          await sleep(randomDelay(300, 700));
+          await sleep(randomDelay(400, 800));
         } else {
           await page.waitForSelector(field.selector, { timeout: 8000 });
 
@@ -766,9 +814,13 @@ export async function autoFillForm(
         });
       }
 
-      // Inter-field pause — calibrated to hit ~30s total for an 8–12 field form
-      // First 3 fields: settling into rhythm; later fields: slightly more deliberate
-      const baseDelay = i < 3 ? randomDelay(800, 1500) : randomDelay(1000, 2000);
+      // Inter-field pause — deliberate gap between fields like a real human
+      // First field: shorter (just getting started); later fields: 2–4 seconds
+      const baseDelay = i === 0
+        ? randomDelay(600, 1200)
+        : i < 3
+          ? randomDelay(1200, 2200)
+          : randomDelay(1800, 3200);
       await sleep(baseDelay);
     }
 
@@ -776,14 +828,60 @@ export async function autoFillForm(
     checkAbort();
 
     // Review pause before submit — user glances over the filled form
-    await sleep(randomDelay(1000, 2000));
+    await sleep(randomDelay(1500, 3000));
 
     // Occasionally do a quick scroll-up review (35% chance)
     if (Math.random() < 0.35) {
       await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-      await sleep(randomDelay(400, 800));
+      await sleep(randomDelay(600, 1200));
       await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
-      await sleep(randomDelay(300, 600));
+      await sleep(randomDelay(500, 900));
+    }
+
+    // --- "I Agree" / consent checkbox detection ---
+    // Many lead-gen forms have a final consent checkbox before the submit button.
+    // We move the mouse to it and click it like a real user.
+    try {
+      const agreeSelectors = [
+        'input[type="checkbox"][name*="agree"]',
+        'input[type="checkbox"][name*="consent"]',
+        'input[type="checkbox"][name*="terms"]',
+        'input[type="checkbox"][id*="agree"]',
+        'input[type="checkbox"][id*="consent"]',
+        'input[type="checkbox"][id*="terms"]',
+        'label:has(input[type="checkbox"])',
+      ];
+      for (const agSel of agreeSelectors) {
+        const agHandle = await page.$(agSel).catch(() => null);
+        if (!agHandle) continue;
+        const agBox = await agHandle.boundingBox().catch(() => null);
+        if (!agBox || agBox.width === 0) continue;
+
+        // Only click if not already checked
+        const isChecked = await page.$eval(agSel, (el: any) =>
+          el.tagName === 'INPUT' ? el.checked : el.querySelector('input')?.checked ?? false
+        ).catch(() => false);
+
+        if (!isChecked) {
+          onProgress({ step: "filling_field", detail: "Clicking 'I Agree'", percent: 83, timestamp: Date.now() });
+          await humanScrollTo(page, agSel);
+          await sleep(randomDelay(300, 600));
+          await humanMouseMove(page, agHandle);
+          await sleep(randomDelay(150, 300));
+          const cx = agBox.x + agBox.width / 2;
+          const cy = agBox.y + agBox.height / 2;
+          await page.mouse.move(cx, cy, { steps: randomDelay(5, 10) });
+          await sleep(randomDelay(80, 160));
+          await page.mouse.down();
+          await sleep(randomDelay(80, 150));
+          await page.mouse.up();
+          await sleep(randomDelay(300, 600));
+          console.log(`[browser] Clicked "I Agree" checkbox: ${agSel}`);
+        }
+        break; // only handle the first matching consent checkbox
+      }
+    } catch (agreeErr: any) {
+      console.warn('[browser] "I Agree" detection skipped:', agreeErr?.message);
     }
 
     onProgress({ step: "submitting", detail: "Submitting", percent: 85, timestamp: Date.now() });
@@ -837,49 +935,54 @@ export async function autoFillForm(
 
         const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
           try {
-            // Use 'auto' instead of 'smooth' so the element is instantly placed at final coordinates
+            // Step 1: Scroll submit button into view smoothly
             await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(400, 800)); // Let the page fully settle
-            
+            await sleep(randomDelay(500, 1000)); // Let the page fully settle after scroll
+
             const box = await elHandle.boundingBox();
             if (box && box.width > 0 && box.height > 0) {
-               // Calculate center exactly
-               const targetX = box.x + box.width / 2;
-               const targetY = box.y + box.height / 2;
-               
-               // Move mouse properly to center
-               await page.mouse.move(targetX, targetY, { steps: randomDelay(5, 10) });
-               await sleep(randomDelay(50, 100));
-               
-               // Dispatch EXACTLY 1 physical click using CDP native API
-               await page.mouse.down();
-               await sleep(randomDelay(60, 120));
-               await page.mouse.up();
-               
-               console.log(`[browser] Clicked submit via strictly physical page.mouse pointer path (${context})`);
-               return true;
+              // Step 2: Move mouse from a nearby offset toward the button (natural trajectory)
+              const targetX = box.x + box.width  * (0.35 + Math.random() * 0.3);
+              const targetY = box.y + box.height * (0.35 + Math.random() * 0.3);
+              const approachX = targetX + randomDelay(-80, 80);
+              const approachY = targetY + randomDelay(-40, 40);
+
+              await page.mouse.move(approachX, approachY, { steps: randomDelay(6, 12) });
+              await sleep(randomDelay(100, 200)); // pause mid-approach
+              await page.mouse.move(targetX, targetY, { steps: randomDelay(4, 8) });
+
+              // Step 3: Hover pause — user reads the button label before clicking
+              await sleep(randomDelay(300, 700));
+
+              // Step 4: Single physical click (mousedown + mouseup)
+              await page.mouse.down();
+              await sleep(randomDelay(80, 150)); // hold duration like a real click
+              await page.mouse.up();
+
+              console.log(`[browser] Clicked submit via human mouse path (${context})`);
+              return true;
             }
           } catch (mouseErr) {
             console.warn(`[browser] Physical mouse click failed (${context}), falling back to synthetic event`, mouseErr);
           }
 
-          // Final fallback to JS click AND dispatching pointer events to trick basic plugins
+          // Final fallback: JS pointer events (for invisible / off-screen buttons)
           const ok = await page.evaluate((node: Element) => {
-              const el = node as HTMLElement;
-              const evtOpts = { bubbles: true, cancelable: true, view: window };
-              el.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
-              el.dispatchEvent(new MouseEvent('mousedown', evtOpts));
-              el.dispatchEvent(new MouseEvent('pointerup', evtOpts));
-              el.dispatchEvent(new MouseEvent('mouseup', evtOpts));
-              el.click(); // the actual JS click
-              return true;
-            }, elHandle).catch(() => false);
+            const el = node as HTMLElement;
+            const evtOpts = { bubbles: true, cancelable: true, view: window };
+            el.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
+            el.dispatchEvent(new MouseEvent('mousedown', evtOpts));
+            el.dispatchEvent(new MouseEvent('pointerup', evtOpts));
+            el.dispatchEvent(new MouseEvent('mouseup', evtOpts));
+            el.click();
+            return true;
+          }, elHandle).catch(() => false);
 
-            if (ok) {
-              console.log(`[browser] Clicked submit via simulated JS pointer events (${context})`);
-              return true;
-            }
-            return false;
+          if (ok) {
+            console.log(`[browser] Clicked submit via simulated JS pointer events (${context})`);
+            return true;
+          }
+          return false;
         };
 
         // --- Step 1: Try standard CSS selectors (instant page.$, no timeout waste) ---
