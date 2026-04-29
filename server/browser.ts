@@ -937,33 +937,18 @@ export async function autoFillForm(
           try {
             // Step 1: Scroll submit button into view smoothly
             await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(500, 1000)); // Let the page fully settle after scroll
+            await sleep(randomDelay(400, 800)); // Let the page fully settle after scroll
 
-            const box = await elHandle.boundingBox();
-            if (box && box.width > 0 && box.height > 0) {
-              // Step 2: Move mouse from a nearby offset toward the button (natural trajectory)
-              const targetX = box.x + box.width  * (0.35 + Math.random() * 0.3);
-              const targetY = box.y + box.height * (0.35 + Math.random() * 0.3);
-              const approachX = targetX + randomDelay(-80, 80);
-              const approachY = targetY + randomDelay(-40, 40);
-
-              await page.mouse.move(approachX, approachY, { steps: randomDelay(6, 12) });
-              await sleep(randomDelay(100, 200)); // pause mid-approach
-              await page.mouse.move(targetX, targetY, { steps: randomDelay(4, 8) });
-
-              // Step 3: Hover pause — user reads the button label before clicking
-              await sleep(randomDelay(300, 700));
-
-              // Step 4: Single physical click (mousedown + mouseup)
-              await page.mouse.down();
-              await sleep(randomDelay(80, 150)); // hold duration like a real click
-              await page.mouse.up();
-
-              console.log(`[browser] Clicked submit via human mouse path (${context})`);
-              return true;
-            }
+            // Step 2: Use Puppeteer's built-in trusted click.
+            // This natively calculates the center, scrolls if needed, moves the mouse, 
+            // and performs a true physical mousedown/mouseup sequence exactly on the element.
+            // This is the most reliable way to trigger "isTrusted=true" events for Google Sheet plugins.
+            await elHandle.click({ delay: randomDelay(80, 150) });
+            
+            console.log(`[browser] Clicked submit via trusted native click (${context})`);
+            return true;
           } catch (mouseErr) {
-            console.warn(`[browser] Physical mouse click failed (${context}), falling back to synthetic event`, mouseErr);
+            console.warn(`[browser] Trusted native click failed (${context}), falling back to synthetic event`, mouseErr);
           }
 
           // Final fallback: JS pointer events (for invisible / off-screen buttons)
@@ -974,7 +959,15 @@ export async function autoFillForm(
             el.dispatchEvent(new MouseEvent('mousedown', evtOpts));
             el.dispatchEvent(new MouseEvent('pointerup', evtOpts));
             el.dispatchEvent(new MouseEvent('mouseup', evtOpts));
-            el.click();
+            el.click(); // The actual JS click
+            
+            // Also try to submit the parent form directly as a last resort
+            const form = el.closest('form');
+            if (form && typeof form.submit === 'function') {
+               // Sometimes form.submit() bypasses JS validation, so we do it cautiously.
+               // We won't call it here to avoid double-submission, just rely on el.click().
+            }
+            
             return true;
           }, elHandle).catch(() => false);
 
