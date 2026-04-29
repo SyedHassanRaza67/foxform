@@ -935,43 +935,79 @@ export async function autoFillForm(
         const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
           try {
             // Step 1: Scroll submit button into view smoothly
-            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(400, 800)); // Let the page fully settle after scroll
+            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+            await sleep(randomDelay(500, 1000)); // Let the page fully settle after scroll
 
-            // Step 2: Use Puppeteer's built-in trusted click.
-            // This natively calculates the center, scrolls if needed, moves the mouse, 
-            // and performs a true physical mousedown/mouseup sequence exactly on the element.
-            // This is the most reliable way to trigger "isTrusted=true" events for Google Sheet plugins.
-            await elHandle.click({ delay: randomDelay(80, 150) });
-            
-            console.log(`[browser] Clicked submit via trusted native click (${context})`);
+            // Step 2: Get the exact bounding box of the button
+            const box = await elHandle.boundingBox();
+            if (!box || box.width === 0 || box.height === 0) {
+              throw new Error('Button has no visible bounding box');
+            }
+
+            // Step 3: Pick a randomised landing point within the inner 50% of the button
+            // (not always the dead center — humans click slightly off-center)
+            const clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
+            const clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
+
+            // Step 4: Approach from a natural random offset (simulate cursor arriving from elsewhere)
+            const approachOffsetX = randomDelay(-120, 120);
+            const approachOffsetY = randomDelay(-60, 60);
+            await page.mouse.move(clickX + approachOffsetX, clickY + approachOffsetY);
+            await sleep(randomDelay(60, 120));
+
+            // Step 5: Move toward the button in steps (natural arc, not a teleport)
+            const midX = clickX + approachOffsetX * 0.4;
+            const midY = clickY + approachOffsetY * 0.4;
+            await page.mouse.move(midX, midY, { steps: randomDelay(4, 8) });
+            await sleep(randomDelay(40, 80));
+            await page.mouse.move(clickX, clickY, { steps: randomDelay(3, 6) });
+
+            // Step 6: Hover pause — human notices the button before pressing
+            await sleep(randomDelay(120, 280));
+
+            // Step 7: Fire physical mousedown → hold → mouseup (isTrusted=true sequence)
+            await page.mouse.down();
+            await sleep(randomDelay(80, 160));  // realistic press hold time
+            await page.mouse.up();
+
+            console.log(`[browser] Clicked submit with full human mouse trajectory (${context}) at (${Math.round(clickX)}, ${Math.round(clickY)})`);
             return true;
-          } catch (mouseErr) {
-            console.warn(`[browser] Trusted native click failed (${context}), falling back to synthetic event`, mouseErr);
+          } catch (mouseErr: any) {
+            console.warn(`[browser] Human mouse click failed (${context}): ${mouseErr?.message} — trying elHandle.click()`);
           }
 
-          // Final fallback: JS pointer events (for invisible / off-screen buttons)
+          // Fallback 1: Puppeteer's built-in click (teleports cursor, but still isTrusted)
+          try {
+            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
+            await sleep(randomDelay(300, 600));
+            await elHandle.click({ delay: randomDelay(80, 150) });
+            console.log(`[browser] Clicked submit via elHandle.click() fallback (${context})`);
+            return true;
+          } catch (fallbackErr: any) {
+            console.warn(`[browser] elHandle.click() fallback also failed (${context}): ${fallbackErr?.message}`);
+          }
+
+          // Fallback 2: Full JS pointer-event chain + el.click() (for off-screen / hidden buttons)
           const ok = await page.evaluate((node: Element) => {
             const el = node as HTMLElement;
-            const evtOpts = { bubbles: true, cancelable: true, view: window };
+            const rect = el.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            const evtOpts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+            el.dispatchEvent(new MouseEvent('mouseover',   evtOpts));
+            el.dispatchEvent(new MouseEvent('mouseenter',  { ...evtOpts, bubbles: false }));
+            el.dispatchEvent(new MouseEvent('mousemove',   evtOpts));
             el.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
-            el.dispatchEvent(new MouseEvent('mousedown', evtOpts));
-            el.dispatchEvent(new MouseEvent('pointerup', evtOpts));
-            el.dispatchEvent(new MouseEvent('mouseup', evtOpts));
-            el.click(); // The actual JS click
-            
-            // Also try to submit the parent form directly as a last resort
-            const form = el.closest('form');
-            if (form && typeof form.submit === 'function') {
-               // Sometimes form.submit() bypasses JS validation, so we do it cautiously.
-               // We won't call it here to avoid double-submission, just rely on el.click().
-            }
-            
+            el.dispatchEvent(new MouseEvent('mousedown',   evtOpts));
+            el.dispatchEvent(new MouseEvent('pointerup',   evtOpts));
+            el.dispatchEvent(new MouseEvent('mouseup',     evtOpts));
+            el.dispatchEvent(new MouseEvent('click',       evtOpts));
+            el.click();
             return true;
           }, elHandle).catch(() => false);
 
           if (ok) {
-            console.log(`[browser] Clicked submit via simulated JS pointer events (${context})`);
+            console.log(`[browser] Clicked submit via JS pointer-event chain (${context})`);
             return true;
           }
           return false;
@@ -1138,9 +1174,17 @@ export async function autoFillForm(
         if (submissionConfirmed) break;
         console.log(`[browser] Submit attempt ${attempt} completed (click fired, confirmation not yet reached)`);
 
+        // Back-off between retry attempts — real humans don't click again instantly.
+        // This also gives AJAX handlers and tracking pixels time to settle.
+        if (attempt < 3) {
+          const retryBackoff = randomDelay(4000, 7000);
+          console.log(`[browser] Waiting ${retryBackoff}ms before retry attempt ${attempt + 1}`);
+          await sleep(retryBackoff);
+        }
+
       } catch (err: any) {
         console.warn(`[browser] Submit attempt ${attempt} failed: ${err.message}`);
-        await sleep(2000);
+        await sleep(randomDelay(3000, 5000));
       }
     }
 
