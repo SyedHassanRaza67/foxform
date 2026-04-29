@@ -278,36 +278,39 @@ async function fillSelectNative(page: any, selector: string, value: string): Pro
     // First try puppeteer's built-in page.select() — works for plain HTML selects
     await page.select(selector, value);
   } catch {
-    // Fallback: native setter + full event chain (for React-controlled selects)
-    await page.evaluate((sel: string, val: string) => {
-      const el = document.querySelector(sel) as HTMLSelectElement | null;
-      if (!el) throw new Error(`Select not found: ${sel}`);
-
-      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      el.focus();
-      el.dispatchEvent(new Event("focus", { bubbles: true }));
-
-      // Try setting value directly, then via native setter
-      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-      if (nativeSetter) {
-        nativeSetter.call(el, val);
-      } else {
-        el.value = val;
-      }
-
-      // Also try selecting the matching <option> directly
-      const matchingOpt = Array.from(el.options).find(
-        o => o.value === val || o.text.toLowerCase() === val.toLowerCase()
-      );
-      if (matchingOpt) {
-        matchingOpt.selected = true;
-      }
-
-      el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-    }, selector, value);
+    // Ignore error here because we'll force the native setter next
   }
+
+  // ALWAYS do the native setter + full event chain (for React/Vue-controlled selects)
+  // because page.select() might not trigger the framework's synthetic event wrappers
+  await page.evaluate((sel: string, val: string) => {
+    const el = document.querySelector(sel) as HTMLSelectElement | null;
+    if (!el) return; // fail silently if not found
+
+    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    el.focus();
+    el.dispatchEvent(new Event("focus", { bubbles: true }));
+
+    // Try setting value directly, then via native setter
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+    if (nativeSetter) {
+      nativeSetter.call(el, val);
+    } else {
+      el.value = val;
+    }
+
+    // Also try selecting the matching <option> directly
+    const matchingOpt = Array.from(el.options).find(
+      o => o.value === val || o.text.toLowerCase() === val.toLowerCase()
+    );
+    if (matchingOpt) {
+      matchingOpt.selected = true;
+    }
+
+    el.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  }, selector, value);
 }
 
 async function hideOverlays(page: any): Promise<void> {
@@ -756,28 +759,24 @@ export async function autoFillForm(
               // Step 4: Wait for the dropdown options to appear visually
               await sleep(randomDelay(400, 700));
 
-              // Step 5: Try to click the matching <option> element in the open dropdown
-              const optionClicked = await page.evaluate(
+              // Step 5: Find the exact value attribute of the matching option
+              const exactValueToSelect = await page.evaluate(
                 (sel: string, val: string) => {
                   const selectEl = document.querySelector(sel) as HTMLSelectElement | null;
-                  if (!selectEl) return false;
+                  if (!selectEl) return null;
                   const opt = Array.from(selectEl.options).find(
                     (o) => o.value === val || o.text.trim().toLowerCase() === val.toLowerCase()
                   );
-                  if (opt) {
-                    // Simulate a click on the option (works for native selects)
-                    opt.selected = true;
-                    selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-                    return true;
-                  }
-                  return false;
+                  return opt ? opt.value : null;
                 },
                 field.selector,
                 value
-              ).catch(() => false);
+              ).catch(() => null);
 
-              if (!optionClicked) {
-                // Fallback: use the native setter path
+              // Step 6: Use native fallback to safely set value and trigger events
+              if (exactValueToSelect !== null) {
+                await fillSelectNative(page, field.selector, exactValueToSelect);
+              } else {
                 await fillSelectNative(page, field.selector, value);
               }
             } else {
