@@ -29,7 +29,7 @@ const US_STATES = [
 ];
 
 export function SiteForm({ site, formData, setFormData, isReadOnly = false }: SiteFormProps) {
-    const siteFields = (site.fields as FormField[]) || [];
+    const siteFields = ((site.fields as FormField[]) || []).filter(f => !f.hidden);
 
     const isZipField = (f: FormField) => {
         if (f.geoRole === "zip") return true;

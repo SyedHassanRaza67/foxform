@@ -644,6 +644,7 @@ export function SitesTab() {
                                <TableHead>Selector</TableHead>
                                <TableHead className="w-24">Type</TableHead>
                                <TableHead className="w-12">Req</TableHead>
+                               <TableHead className="w-12">Hide</TableHead>
                                <TableHead className="w-12"></TableHead>
                             </TableRow>
                          </TableHeader>
@@ -680,6 +681,11 @@ export function SitesTab() {
                                          const nf = [...(editSiteData.fields as FormField[])]; nf[idx].required = e.target.checked; setEditSiteData({...editSiteData, fields: nf});
                                      }} className="w-4 h-4 cursor-pointer" />
                                   </TableCell>
+                                  <TableCell className="p-2 text-center">
+                                     <input type="checkbox" checked={field.hidden || false} onChange={(e) => {
+                                         const nf = [...(editSiteData.fields as FormField[])]; nf[idx].hidden = e.target.checked; setEditSiteData({...editSiteData, fields: nf});
+                                     }} className="w-4 h-4 cursor-pointer" title="Hide from agents" />
+                                  </TableCell>
                                   <TableCell className="p-2 text-right">
                                      <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => {
                                          const nf = [...(editSiteData.fields as FormField[])]; nf.splice(idx, 1); setEditSiteData({...editSiteData, fields: nf});
@@ -710,6 +716,7 @@ export function SitesTab() {
 function AgentsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState({ name: "", email: "", password: "", siteIds: [] as string[] });
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/sites"] });
@@ -728,6 +735,23 @@ function AgentsTab() {
     },
     onError: (err: any) => {
       toast({ title: "Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateAgentMutation = useMutation({
+    mutationFn: async (agent: typeof newAgent & { id: string }) => {
+      const res = await apiRequest("PUT", `/api/agents/${agent.id}`, agent);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      setDialogOpen(false);
+      setEditingAgentId(null);
+      setNewAgent({ name: "", email: "", password: "", siteIds: [] });
+      toast({ title: "Agent updated successfully" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -755,21 +779,32 @@ function AgentsTab() {
           <h3 className="text-lg font-semibold">Agent Accounts</h3>
           <p className="text-sm text-muted-foreground mt-1">Create agents and assign them sites to fill forms</p>
         </div>
-        <Button onClick={() => setDialogOpen(true)} data-testid="button-create-agent">
+        <Button onClick={() => {
+          setEditingAgentId(null);
+          setNewAgent({ name: "", email: "", password: "", siteIds: [] });
+          setDialogOpen(true);
+        }} data-testid="button-create-agent">
           <UserPlus className="w-4 h-4 mr-2" />
           Create Agent
         </Button>
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        setDialogOpen(open);
+        if (!open) setEditingAgentId(null);
+      }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Agent Account</DialogTitle>
+            <DialogTitle>{editingAgentId ? "Edit Agent Account" : "Create Agent Account"}</DialogTitle>
           </DialogHeader>
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              createMutation.mutate();
+              if (editingAgentId) {
+                updateAgentMutation.mutate({ ...newAgent, id: editingAgentId });
+              } else {
+                createMutation.mutate();
+              }
             }}
             className="space-y-4"
           >
@@ -793,12 +828,12 @@ function AgentsTab() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Password</Label>
+              <Label>Password {editingAgentId && <span className="text-muted-foreground text-xs font-normal">(Leave blank to keep unchanged)</span>}</Label>
               <Input
                 type="password"
                 value={newAgent.password}
                 onChange={(e) => setNewAgent({ ...newAgent, password: e.target.value })}
-                required
+                required={!editingAgentId}
                 minLength={6}
                 data-testid="input-agent-password"
               />
@@ -823,9 +858,9 @@ function AgentsTab() {
                 </div>
               )}
             </div>
-            <Button type="submit" className="w-full" disabled={createMutation.isPending} data-testid="button-submit-create-agent">
-              {createMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Create Agent
+            <Button type="submit" className="w-full" disabled={createMutation.isPending || updateAgentMutation.isPending} data-testid="button-submit-create-agent">
+              {(createMutation.isPending || updateAgentMutation.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {editingAgentId ? "Save Changes" : "Create Agent"}
             </Button>
           </form>
         </DialogContent>
@@ -880,7 +915,19 @@ function AgentsTab() {
                       {agent.isActive ? "Active" : "Disabled"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-right flex items-center justify-end gap-1">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => {
+                        setEditingAgentId(agent.id);
+                        setNewAgent({ name: agent.name, email: agent.email, password: "", siteIds: agent.assignedSiteIds });
+                        setDialogOpen(true);
+                      }}
+                      data-testid={`button-edit-agent-${agent.id}`}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </Button>
                     <Button
                       size="icon"
                       variant="ghost"

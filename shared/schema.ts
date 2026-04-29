@@ -33,6 +33,7 @@ export const formFieldSchema = z.object({
   required: z.boolean(),
   order: z.number(),
   geoRole: z.enum(["zip", "state", "county"]).nullable().optional(),
+  hidden: z.boolean().optional(),
 });
 
 export type FormField = z.infer<typeof formFieldSchema>;

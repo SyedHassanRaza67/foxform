@@ -427,9 +427,9 @@ export async function registerRoutes(
         if (site.ownerId !== req.user!.userId) {
           return res.status(403).json({ message: "Access denied" });
         }
-        const { fields, notes } = req.body;
+        const { fields, notes, name, url, formSelector, submitSelector, googleSheetUrl } = req.body;
         
-        console.log(`[sites] Updating site ${siteId}:`, { hasFields: !!fields, hasNotes: notes !== undefined });
+        console.log(`[sites] Updating site ${siteId}:`, { hasFields: !!fields, hasNotes: notes !== undefined, name, googleSheetUrl });
 
         const updateData: any = {};
         if (fields !== undefined) {
@@ -438,9 +438,12 @@ export async function registerRoutes(
           }
           updateData.fields = fields;
         }
-        if (notes !== undefined) {
-          updateData.notes = notes;
-        }
+        if (notes !== undefined) updateData.notes = notes;
+        if (name !== undefined) updateData.name = name;
+        if (url !== undefined) updateData.url = url;
+        if (formSelector !== undefined) updateData.formSelector = formSelector;
+        if (submitSelector !== undefined) updateData.submitSelector = submitSelector;
+        if (googleSheetUrl !== undefined) updateData.googleSheetUrl = googleSheetUrl;
 
         if (Object.keys(updateData).length === 0) {
           return res.status(400).json({ message: "No data provided to update" });
@@ -480,6 +483,42 @@ export async function registerRoutes(
 
       const { password, ...agentWithoutPassword } = agent;
       return res.json({ ...agentWithoutPassword, assignedSiteIds: parsed.data.siteIds });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.put("/api/agents/:id", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const agentId = req.params.id;
+      const targetAgent = await storage.getUser(agentId);
+      if (!targetAgent) return res.status(404).json({ message: "Agent not found" });
+      if (targetAgent.parentUserId !== req.user!.userId) {
+         return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { name, email, password, siteIds } = req.body;
+      const updateData: any = {};
+      if (name) updateData.name = name;
+      if (email) updateData.email = email;
+      if (password) {
+        const bcrypt = require("bcryptjs");
+        updateData.password = await bcrypt.hash(password, 10);
+      }
+
+      await storage.updateUser(agentId, updateData);
+
+      if (Array.isArray(siteIds)) {
+        const existingSites = await storage.getAgentSiteIds(agentId);
+        for (const sid of existingSites) {
+           await storage.removeSiteFromAgent(agentId, sid);
+        }
+        for (const sid of siteIds) {
+           await storage.assignSiteToAgent(agentId, sid);
+        }
+      }
+      
+      return res.json({ success: true });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
