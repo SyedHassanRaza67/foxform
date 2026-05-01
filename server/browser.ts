@@ -122,18 +122,19 @@ async function typeHumanLike(page: any, value: string): Promise<void> {
       await sleep(randomDelay(120, 280));
     }
 
-    // Natural typing speed ~70–100 WPM
-    // Mid-word chars: 70–130ms; boundaries/spaces/punctuation: 100–180ms
+    // Natural typing speed — slowed down per user request
+    // Short words (~5 chars) will take ~2-3 seconds of pure typing time
+    // Long words (address, ~15-20 chars) will take ~6-8 seconds
     const prevCh = i > 0 ? value[i - 1] : '';
     const isWordChar = prevCh && prevCh !== ' ' && ch !== ' ' && ch !== '.' && ch !== ',';
     const keystrokeDelay = isWordChar
-      ? randomDelay(70, 130)    // mid-word characters
-      : randomDelay(100, 180);  // word boundaries / spaces / punctuation
+      ? randomDelay(200, 450)    // slower mid-word characters
+      : randomDelay(300, 600);  // word boundaries / spaces / punctuation
 
     await page.keyboard.type(ch, { delay: keystrokeDelay });
   }
   // Brief post-field glance pause
-  await sleep(randomDelay(100, 200));
+  await sleep(randomDelay(400, 800));
 }
 
 /**
@@ -236,24 +237,23 @@ async function fillFieldHuman(
   await humanScrollTo(page, selector);
 
   // Step 2: Reading pause — user notices and reads the field label
-  await sleep(randomDelay(150, 320));
+  await sleep(randomDelay(800, 1500));
 
   const handle = await page.$(selector);
 
   // Step 3: Move mouse naturally to the field via a 3-point arc
   if (handle) {
     await humanMouseMove(page, handle);
-    // humanMouseMove already ends with a hover pause; small extra settle time
-    await sleep(randomDelay(20, 50));
+    await sleep(randomDelay(200, 400));
   }
 
   // Step 4: Click to focus (triple-click selects any existing text)
-  await page.click(selector, { clickCount: 3, delay: randomDelay(30, 60) });
-  await sleep(randomDelay(80, 160));
+  await page.click(selector, { clickCount: 3, delay: randomDelay(80, 150) });
+  await sleep(randomDelay(400, 800));
 
   // Step 5: Clear any pre-filled value
   await page.keyboard.press('Backspace');
-  await sleep(randomDelay(30, 60));
+  await sleep(randomDelay(100, 200));
 
   // Step 6: Type character-by-character at natural human speed
   try {
@@ -264,7 +264,7 @@ async function fillFieldHuman(
   }
 
   // Step 7: Brief post-type pause — user reviews what they typed
-  await sleep(randomDelay(80, 160));
+  await sleep(randomDelay(400, 800));
 
   // Step 8: Tab away (60%) or blur (40%) to commit the value
   if (Math.random() < 0.6) {
@@ -759,15 +759,17 @@ export async function autoFillForm(
               await page.waitForSelector(field.selector, { timeout: 8000 });
               const isChecked = await page.$eval(field.selector, (el: any) => el.checked);
               if (!isChecked) {
+                await sleep(randomDelay(800, 1200)); // Pause to notice the checkbox
                 await clickFieldHumanLocal(field.selector);
-                await sleep(randomDelay(100, 250));
+                await sleep(randomDelay(600, 1000)); // Post-click pause
               }
             } catch {
               const altSel = `input[type="checkbox"][value="${field.options?.[0] || value}"]`;
               try {
                 await page.waitForSelector(altSel, { timeout: 3000 });
+                await sleep(randomDelay(800, 1200));
                 await clickFieldHumanLocal(altSel);
-                await sleep(randomDelay(100, 250));
+                await sleep(randomDelay(600, 1000));
               } catch { }
             }
           }
@@ -810,7 +812,7 @@ export async function autoFillForm(
               await page.mouse.up();
 
               // Step 4: Wait for the dropdown options to appear visually
-              await sleep(randomDelay(400, 700));
+              await sleep(randomDelay(600, 1000));
 
               // Step 5: Find the exact value attribute of the matching option
               const exactValueToSelect = await page.evaluate(
@@ -826,6 +828,9 @@ export async function autoFillForm(
                 value
               ).catch(() => null);
 
+              // Simulate the human searching for the option and clicking it
+              await sleep(randomDelay(1000, 1800));
+
               // Step 6: Use native fallback to safely set value and trigger events
               if (exactValueToSelect !== null) {
                 await fillSelectNative(page, field.selector, exactValueToSelect);
@@ -834,6 +839,7 @@ export async function autoFillForm(
               }
             } else {
               // No bounding box — go straight to native
+              await sleep(randomDelay(1000, 1800));
               await fillSelectNative(page, field.selector, value);
             }
           } else {
