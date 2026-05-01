@@ -1009,9 +1009,9 @@ export async function autoFillForm(
 
         const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
           try {
-            // Step 1: Scroll submit button into view INSTANTLY (smooth scroll causes moving targets)
+            // Step 1: Scroll submit button into view instantly (smooth scroll causes moving targets)
             await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(300, 600)); // Let the page fully settle after scroll
+            await sleep(randomDelay(350, 650)); // Let the page fully settle after scroll
 
             // Step 2: Get the exact bounding box of the button
             let box = await elHandle.boundingBox();
@@ -1020,90 +1020,105 @@ export async function autoFillForm(
             }
 
             // Step 3: Pick a randomised landing point within the inner 50% of the button
-            // (not always the dead center — humans click slightly off-center)
+            // (humans never click dead center — slightly off-center is more realistic)
             let clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
             let clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
 
-            // Verify if the element is actually clickable at this point or if it's covered by a sticky header/overlay
+            // Step 4: Verify the element is actually clickable (not covered by overlay/header)
             let isClickable = await page.evaluate((x: number, y: number, node: Element) => {
               const elAtPoint = document.elementFromPoint(x, y);
-              return elAtPoint === node || node.contains(elAtPoint) || (elAtPoint && elAtPoint.closest && elAtPoint.closest('button, input[type="submit"]') === node);
+              return elAtPoint === node || node.contains(elAtPoint) ||
+                (elAtPoint && elAtPoint.closest && elAtPoint.closest('button, input[type="submit"]') === node);
             }, clickX, clickY, elHandle).catch(() => true);
 
             if (!isClickable) {
-              console.warn(`[browser] Submit button is obscured at (${Math.round(clickX)}, ${Math.round(clickY)}). Adjusting scroll to avoid sticky header/footer.`);
-              await page.evaluate(() => window.scrollBy(0, -150)); // Scroll up slightly to avoid sticky footers
-              await sleep(300);
+              console.warn(`[browser] Submit button obscured at (${Math.round(clickX)},${Math.round(clickY)}) — scrolling to clear.`);
+              await page.evaluate(() => window.scrollBy(0, -180));
+              await sleep(400);
               const newBox = await elHandle.boundingBox();
               if (newBox) {
                 box = newBox;
-                clickX = box.x + box.width * (0.25 + Math.random() * 0.50);
+                clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
                 clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
               }
             }
 
-            // Step 4: Approach from a natural random offset (simulate cursor arriving from elsewhere)
-            const approachOffsetX = randomDelay(-120, 120);
-            const approachOffsetY = randomDelay(-60, 60);
-            const startX = clickX + approachOffsetX;
-            const startY = clickY + approachOffsetY;
+            // Step 5: Full 5-point human mouse arc
+            //   Start (off-screen random) → Point1 → Midpoint (slight curve) → Point2 → Target
+            //   This mimics a real human cursor path and passes isTrusted pointer checks.
+            const offX = randomDelay(-150, 150) * (Math.random() > 0.5 ? 1 : -1);
+            const offY = randomDelay(-80, 80)   * (Math.random() > 0.5 ? 1 : -1);
+            const startX = clickX + offX;
+            const startY = clickY + offY;
 
-            await page.mouse.move(startX, startY);
-            await sleep(randomDelay(40, 90));
+            // Move to approach point first (cursor arrives from elsewhere on the page)
+            await page.mouse.move(startX, startY, { steps: randomDelay(3, 5) });
+            await sleep(randomDelay(30, 70));
 
-            // Step 5: Move toward the button in steps (natural arc, not a straight line)
-            const midX = startX + (clickX - startX) * 0.5 + randomDelay(-20, 20);
-            const midY = startY + (clickY - startY) * 0.5 + randomDelay(-15, 15);
-            await page.mouse.move(midX, midY, { steps: randomDelay(4, 7) });
-            await sleep(randomDelay(20, 50));
-            await page.mouse.move(clickX, clickY, { steps: randomDelay(4, 7) });
+            // Arc point 1 — slight deviation from straight line
+            const arc1X = startX + (clickX - startX) * 0.33 + randomDelay(-25, 25);
+            const arc1Y = startY + (clickY - startY) * 0.33 + randomDelay(-15, 15);
+            await page.mouse.move(arc1X, arc1Y, { steps: randomDelay(4, 6) });
+            await sleep(randomDelay(15, 35));
 
-            // Step 6: Hover pause — human notices the button before pressing
-            await sleep(randomDelay(150, 300));
+            // Arc point 2 — deceleration near the target
+            const arc2X = startX + (clickX - startX) * 0.70 + randomDelay(-15, 15);
+            const arc2Y = startY + (clickY - startY) * 0.70 + randomDelay(-10, 10);
+            await page.mouse.move(arc2X, arc2Y, { steps: randomDelay(4, 7) });
+            await sleep(randomDelay(15, 30));
 
-            // Step 7: Fire physical mousedown → hold → mouseup (isTrusted=true sequence)
+            // Final approach — land precisely on the button
+            await page.mouse.move(clickX, clickY, { steps: randomDelay(3, 5) });
+
+            // Step 6: Hover pause — human briefly notices the button before pressing
+            await sleep(randomDelay(180, 380));
+
+            // Step 7: Physical mousedown → hold → mouseup (generates isTrusted=true events)
             await page.mouse.down();
-            await sleep(randomDelay(70, 150));  // realistic press hold time
+            await sleep(randomDelay(80, 160)); // realistic button press duration
             await page.mouse.up();
+            await sleep(randomDelay(60, 120)); // brief post-click pause before page reacts
 
-            console.log(`[browser] Clicked submit with full human mouse trajectory (${context}) at (${Math.round(clickX)}, ${Math.round(clickY)})`);
+            console.log(`[browser] ✓ Human click fired (${context}) → (${Math.round(clickX)}, ${Math.round(clickY)})`);
             return true;
           } catch (mouseErr: any) {
-            console.warn(`[browser] Human mouse click failed (${context}): ${mouseErr?.message} — trying elHandle.click()`);
+            console.warn(`[browser] Human mouse trajectory failed (${context}): ${mouseErr?.message} — falling back to elHandle.click()`);
           }
 
-          // Fallback 1: Puppeteer's built-in click (teleports cursor, but still isTrusted)
+          // Fallback 1: Puppeteer built-in click — scrolls into view, still isTrusted on most pages
           try {
             await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(300, 600));
-            await elHandle.click({ delay: randomDelay(80, 150) });
-            console.log(`[browser] Clicked submit via elHandle.click() fallback (${context})`);
+            await sleep(randomDelay(300, 500));
+            await elHandle.click({ delay: randomDelay(90, 160) });
+            console.log(`[browser] ✓ Clicked via elHandle.click() (${context})`);
             return true;
           } catch (fallbackErr: any) {
-            console.warn(`[browser] elHandle.click() fallback also failed (${context}): ${fallbackErr?.message}`);
+            console.warn(`[browser] elHandle.click() also failed (${context}): ${fallbackErr?.message}`);
           }
 
-          // Fallback 2: Full JS pointer-event chain + el.click() (for off-screen / hidden buttons)
+          // Fallback 2: Synthetic pointer-event chain — fires a SINGLE click event only.
+          // IMPORTANT: do NOT call el.click() here in addition to dispatchEvent — that would
+          // submit the form twice and cause duplicate backend entries.
           const ok = await page.evaluate((node: Element) => {
             const el = node as HTMLElement;
             const rect = el.getBoundingClientRect();
-            const cx = rect.left + rect.width / 2;
-            const cy = rect.top + rect.height / 2;
-            const evtOpts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
-            el.dispatchEvent(new MouseEvent('mouseover',   evtOpts));
-            el.dispatchEvent(new MouseEvent('mouseenter',  { ...evtOpts, bubbles: false }));
-            el.dispatchEvent(new MouseEvent('mousemove',   evtOpts));
-            el.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
-            el.dispatchEvent(new MouseEvent('mousedown',   evtOpts));
-            el.dispatchEvent(new MouseEvent('pointerup',   evtOpts));
-            el.dispatchEvent(new MouseEvent('mouseup',     evtOpts));
-            el.dispatchEvent(new MouseEvent('click',       evtOpts));
-            el.click();
+            const cx = rect.left + rect.width  / 2;
+            const cy = rect.top  + rect.height / 2;
+            const base = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+            el.dispatchEvent(new PointerEvent('pointerover',  { ...base, pointerId: 1, pointerType: 'mouse' }));
+            el.dispatchEvent(new MouseEvent ('mouseover',    base));
+            el.dispatchEvent(new PointerEvent('pointermove',  { ...base, pointerId: 1, pointerType: 'mouse' }));
+            el.dispatchEvent(new MouseEvent ('mousemove',    base));
+            el.dispatchEvent(new PointerEvent('pointerdown',  { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+            el.dispatchEvent(new MouseEvent ('mousedown',    { ...base, button: 0, buttons: 1 }));
+            el.dispatchEvent(new PointerEvent('pointerup',    { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+            el.dispatchEvent(new MouseEvent ('mouseup',      { ...base, button: 0, buttons: 0 }));
+            el.dispatchEvent(new MouseEvent ('click',        { ...base, button: 0, buttons: 0 })); // ONE click only
             return true;
           }, elHandle).catch(() => false);
 
           if (ok) {
-            console.log(`[browser] Clicked submit via JS pointer-event chain (${context})`);
+            console.log(`[browser] ✓ Clicked via synthetic pointer-event chain (${context})`);
             return true;
           }
           return false;
@@ -1211,161 +1226,161 @@ export async function autoFillForm(
         }
 
         if (!clickFired) {
-          console.warn(`[browser] Submit attempt ${attempt}: no clickable button or form found, skipping fallback submit to ensure plugins trigger`);
-          await sleep(2000);
-          continue;
+          console.warn(`[browser] Submit attempt ${attempt}: no button/form found. Waiting before retry.`);
+          await sleep(2500);
+          continue; // re-try the whole selector search on the next loop iteration
         }
 
-        if (clickFired) totalClicksFired++;
+        // Click fired — count it and stop the selector-search loop (no re-clicking)
+        totalClicksFired++;
 
-        // --- Step 4: Click was fired — wait for confirmation ---
-        // We now only allow 1 successful click to prevent double submissions.
-        // Give it all the remaining time in the phase budget.
-        const timeElapsed = Date.now() - submissionStartTime;
-        const confirmationTimeout = Math.max(5000, SUBMISSION_PHASE_MAX_MS - timeElapsed);
-        const deadline = Date.now() + confirmationTimeout;
+        // --- Post-click confirmation window ---
+        // Give the page up to 20s to confirm. This is the most important window:
+        // AJAX forms, SPA routers and slow network connections all need this time.
+        // We do NOT re-click during this window — that would cause duplicate submissions.
+        onProgress({ step: "submitting", detail: "Waiting for confirmation...", percent: 88 + attempt, timestamp: Date.now() });
 
-        // Watch for any XHR/fetch fired after clicking — strong sign form was processed
+        // Brief network-idle grace period (lets AJAX fire before we start polling)
+        try { await page.waitForNetworkIdle({ timeout: 3000 }); } catch { /* fine */ }
+
+        const confirmationWindow = 20000; // 20s max per attempt
+        const confirmDeadline = Date.now() + confirmationWindow;
+
+        // Capture body snapshot immediately after click for change detection
         let networkActivityDetected = false;
-        const networkListener = (req: any) => { networkActivityDetected = true; };
+        const networkListener = (_req: any) => { networkActivityDetected = true; };
         try { page.on('request', networkListener); } catch { }
-        while (Date.now() < deadline) {
-          await sleep(500);
 
+        while (Date.now() < confirmDeadline) {
+          await sleep(600);
+
+          // 1. URL navigation — most reliable confirmation signal
           const currentUrl = page.url();
           if (currentUrl !== urlBefore) {
-            console.log(`[browser] Submit confirmed via URL change: ${currentUrl}`);
+            console.log(`[browser] ✓ Confirmed via URL change: ${currentUrl}`);
             submissionConfirmed = true;
             break;
           }
 
           const bodyNow = await page.evaluate(() =>
-            document.body?.innerText?.toLowerCase().slice(0, 2000) || ""
+            document.body?.innerText?.toLowerCase().slice(0, 2500) || ""
           ).catch(() => "");
 
+          // 2. Success text in DOM
           if (SUCCESS_PATTERNS.some(p => bodyNow.includes(p))) {
-            console.log(`[browser] Submit confirmed via success DOM indicator`);
+            console.log(`[browser] ✓ Confirmed via success text in DOM`);
             submissionConfirmed = true;
             break;
           }
 
-          // Significant body shrink = form replaced by success message
-          if (bodyBefore && bodyNow && bodyNow !== bodyBefore.toLowerCase() && bodyNow.length < bodyBefore.length * 0.5) {
-            console.log(`[browser] Submit confirmed via body content change`);
+          // 3. Body content shrank significantly (form replaced by thank-you message)
+          if (bodyBefore && bodyNow && bodyNow !== bodyBefore.toLowerCase() && bodyNow.length < bodyBefore.length * 0.6) {
+            console.log(`[browser] ✓ Confirmed via body shrink (form replaced by message)`);
             submissionConfirmed = true;
             break;
           }
 
-          // JSON response = API-style form action
+          // 4. JSON API response
           const isJSON = await page.evaluate(() =>
             document.contentType === 'application/json' ||
             (document.body?.innerText?.trim().startsWith('{') && document.body?.innerText?.trim().endsWith('}'))
           ).catch(() => false);
-
           if (isJSON) {
-            console.log(`[browser] Submit confirmed via JSON response`);
+            console.log(`[browser] ✓ Confirmed via JSON API response`);
             submissionConfirmed = true;
             break;
           }
 
-          // SPA detection: form element disappeared from DOM (AJAX submitted in-place)
-          const formGone = await page.evaluate(() => {
-            return document.querySelector('form') === null;
-          }).catch(() => false);
+          // 5. SPA: form element removed from DOM (AJAX in-place submit)
+          const formGone = await page.evaluate(() => document.querySelector('form') === null).catch(() => false);
           if (formGone) {
-            console.log(`[browser] Submit confirmed via form element removal (SPA AJAX submit)`);
+            console.log(`[browser] ✓ Confirmed via form removal (SPA AJAX)`);
             submissionConfirmed = true;
             break;
           }
 
-          // aria-live region updated = screen-reader-friendly success message
+          // 6. aria-live / role=status region updated with success message
           const ariaMsg = await page.evaluate(() => {
-            const live = document.querySelector('[aria-live="polite"], [aria-live="assertive"], [role="alert"], [role="status"]') as HTMLElement | null;
-            return live ? live.innerText.toLowerCase().trim() : "";
+            const el = document.querySelector('[aria-live], [role="alert"], [role="status"]') as HTMLElement | null;
+            return el ? el.innerText.toLowerCase().trim() : "";
           }).catch(() => "");
           if (ariaMsg && SUCCESS_PATTERNS.some(p => ariaMsg.includes(p))) {
-            console.log(`[browser] Submit confirmed via aria-live region: "${ariaMsg}"`);
+            console.log(`[browser] ✓ Confirmed via aria-live: "${ariaMsg}"`);
             submissionConfirmed = true;
             break;
           }
 
-          // Check for validation error patterns
+          // 7. Network POST fired + any DOM change = strong signal
+          if (networkActivityDetected) {
+            const bodyNowFinal = await page.evaluate(() =>
+              document.body?.innerText?.toLowerCase().slice(0, 2500) || ""
+            ).catch(() => "");
+            const domChanged = bodyNowFinal !== bodyBefore.toLowerCase();
+            const urlChanged = page.url() !== urlBefore;
+            if (domChanged || urlChanged) {
+              console.log('[browser] ✓ Confirmed via network activity + DOM/URL change');
+              submissionConfirmed = true;
+              break;
+            }
+          }
+
+          // 8. Visible validation error — stop waiting, a re-click won't help
           if (ERROR_PATTERNS.some(p => bodyNow.includes(p))) {
             const visibleError = await page.evaluate((patterns: string[]) => {
               const bodyText = document.body.innerText.toLowerCase();
               const found = patterns.find(p => bodyText.includes(p));
               if (!found) return null;
-              const errorElements = Array.from(document.querySelectorAll(
+              const errorEls = Array.from(document.querySelectorAll(
                 '.error, .alert, .invalid-feedback, [class*="error"], [id*="error"], [class*="invalid"]'
               )) as HTMLElement[];
-              const visible = errorElements.find(el => el.innerText && el.offsetParent !== null);
-              return visible ? visible.innerText.slice(0, 200) : `Validation error detected (pattern: "${found}")`;
+              const visible = errorEls.find(el => el.innerText && el.offsetParent !== null);
+              return visible ? visible.innerText.slice(0, 200) : `Validation error (pattern: "${found}")`;
             }, ERROR_PATTERNS).catch(() => null);
 
             if (visibleError) {
               lastErrorDetail = visibleError;
-              console.warn(`[browser] Validation error detected: ${visibleError}`);
-              break;
-            }
-          }
-          // Network activity after click = form likely sent data to server
-          if (networkActivityDetected) {
-            // Only treat as confirmed if we also see the body changed or URL changed
-            const bodyNowFinal = await page.evaluate(() =>
-              document.body?.innerText?.toLowerCase().slice(0, 2000) || ""
-            ).catch(() => "");
-            if (bodyNowFinal !== bodyBefore.toLowerCase() || page.url() !== urlBefore) {
-              console.log('[browser] Submit confirmed via network activity + DOM/URL change');
-              submissionConfirmed = true;
+              console.warn(`[browser] Validation error: ${visibleError}`);
               break;
             }
           }
         }
         try { page.off('request', networkListener); } catch { }
 
-        if (submissionConfirmed) break;
-        console.log(`[browser] Submit attempt ${attempt} completed (click fired, confirmation not yet reached)`);
+        if (submissionConfirmed || lastErrorDetail) break;
 
-        if (lastErrorDetail) {
-          break; // Validation error visible — retrying click won't help
-        }
-
-        if (clickFired) {
-          console.log(`[browser] Preventing double-submission by not clicking again.`);
-          break; // We clicked successfully, stop the retry loop
-        }
-
-        // Short back-off between retry attempts (only reached if NO click fired)
-        if (attempt < 3) {
-          const retryBackoff = randomDelay(1000, 2000);
-          console.log(`[browser] Waiting ${retryBackoff}ms before retry attempt ${attempt + 1}`);
-          await sleep(retryBackoff);
-        }
+        console.log(`[browser] Attempt ${attempt}: click fired but confirmation not reached within ${confirmationWindow / 1000}s. Not re-clicking (prevents double submission).`);
+        // Don't re-click — the form was already submitted, just slow to respond.
+        // The optimistic fallback below will handle it.
+        break;
 
       } catch (err: any) {
-        console.warn(`[browser] Submit attempt ${attempt} failed: ${err.message}`);
-        await sleep(randomDelay(3000, 5000));
+        console.warn(`[browser] Submit attempt ${attempt} error: ${err.message}`);
+        if (attempt < 3) await sleep(randomDelay(1500, 3000));
       }
     }
 
     // --- Optimistic success fallback ---
-    // ONLY activate if we fired at least 1 click AND we have no visible errors.
-    // We wait extra time to catch delayed AJAX success messages / SPA transitions.
+    // Fires only if: (a) we clicked at least once, AND (b) no visible validation error appeared.
+    // This handles slow AJAX responses, SPA transitions, and forms with no visible feedback.
     if (!submissionConfirmed && totalClicksFired >= 1 && !lastErrorDetail) {
-      // Extra 5s wait to catch delayed AJAX success messages / SPA transitions
-      onProgress({ step: "submitting", detail: "Waiting for final confirmation...", percent: 96, timestamp: Date.now() });
-      await sleep(5000);
+      onProgress({ step: "submitting", detail: "Waiting for final server response...", percent: 96, timestamp: Date.now() });
+      await sleep(6000); // Extra 6s — gives slow AJAX / CDN-cached responses time to settle
 
-      // Re-check URL and body one last time
       const finalUrl = page.url();
-      const finalBody = await page.evaluate(() => document.body?.innerText?.toLowerCase().slice(0, 2000) || "").catch(() => "");
+      const finalBody = await page.evaluate(() => document.body?.innerText?.toLowerCase().slice(0, 2500) || "").catch(() => "");
+
       if (finalUrl !== urlBefore) {
-        console.log('[browser] Optimistic: URL changed after wait — confirmed.');
+        console.log('[browser] Optimistic ✓: URL changed after extra wait.');
         submissionConfirmed = true;
       } else if (SUCCESS_PATTERNS.some(p => finalBody.includes(p))) {
-        console.log('[browser] Optimistic: success text appeared after wait — confirmed.');
+        console.log('[browser] Optimistic ✓: success text appeared after extra wait.');
+        submissionConfirmed = true;
+      } else if (bodyBefore && finalBody && finalBody !== bodyBefore.toLowerCase() && finalBody.length < bodyBefore.length * 0.75) {
+        // Body changed meaningfully (shrank) = form was replaced with a response
+        console.log('[browser] Optimistic ✓: page body changed after extra wait (form replaced).');
         submissionConfirmed = true;
       } else {
+        // Last resort: check for visible errors. If none found, treat as submitted.
         const hasVisibleError = await page.evaluate((patterns: string[]) => {
           const bodyText = document.body?.innerText?.toLowerCase() || "";
           if (!patterns.some(p => bodyText.includes(p))) return false;
@@ -1376,8 +1391,8 @@ export async function autoFillForm(
         }, ERROR_PATTERNS).catch(() => false);
 
         if (!hasVisibleError) {
-          console.log(`[browser] Optimistic success — all 3 clicks fired, no visible error. Treating as success.`);
-          onProgress({ step: "complete", detail: "Submitted (no redirect detected — treating as success)", percent: 100, timestamp: Date.now() });
+          console.log('[browser] Optimistic ✓: click fired, no visible error — treating as successful submission.');
+          onProgress({ step: "complete", detail: "Submitted (awaiting server — treating as success)", percent: 100, timestamp: Date.now() });
           submissionConfirmed = true;
         }
       }

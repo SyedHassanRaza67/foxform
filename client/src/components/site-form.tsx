@@ -102,7 +102,7 @@ export function SiteForm({ site, formData, setFormData, isReadOnly = false }: Si
                             {field.type === "checkbox" ? (
                                 <div className="flex items-center gap-2 py-1">
                                     <Checkbox
-                                        className="h-3.5 w-3.5"
+                                        className={`h-3.5 w-3.5 ${field.required && !formData[field.name] ? "ring-1 ring-destructive" : ""}`}
                                         disabled={isReadOnly}
                                         checked={formData[field.name] === (field.options?.[0] || "true")}
                                         onCheckedChange={(checked) =>
@@ -116,7 +116,7 @@ export function SiteForm({ site, formData, setFormData, isReadOnly = false }: Si
                                     <span className="text-[11px] text-muted-foreground">{field.label || field.name}</span>
                                 </div>
                             ) : field.type === "radio" && field.options ? (
-                                <div className="flex flex-wrap gap-x-3 gap-y-1 py-1">
+                                <div className={`flex flex-wrap gap-x-3 gap-y-1 py-1 rounded ${field.required && !formData[field.name] ? "ring-1 ring-destructive/50 px-1" : ""}`}>
                                     {field.options.map((opt) => (
                                         <label key={opt} className="flex items-center gap-1.5 cursor-pointer">
                                             <input
@@ -139,7 +139,7 @@ export function SiteForm({ site, formData, setFormData, isReadOnly = false }: Si
                                     value={formData[field.name] || ""}
                                     onValueChange={(v) => setFormData({ ...formData, [field.name]: v })}
                                 >
-                                    <SelectTrigger className="h-8 text-[11px]" data-testid={`select-field-${field.name}`}>
+                                    <SelectTrigger className={`h-8 text-[11px] ${field.required && !formData[field.name] ? "border-destructive/50 ring-1 ring-destructive/30" : ""}`} data-testid={`select-field-${field.name}`}>
                                         <SelectValue placeholder={`Select ${field.label || field.name}`} />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -152,7 +152,7 @@ export function SiteForm({ site, formData, setFormData, isReadOnly = false }: Si
                                 <textarea
                                     readOnly={isReadOnly}
                                     autoComplete="off"
-                                    className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-1.5 text-[11px] ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
+                                    className={`flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-1.5 text-[11px] ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 ${field.required && !(formData[field.name] || "").trim() ? "border-destructive/50" : ""}`}
                                     placeholder={field.label || field.name}
                                     value={formData[field.name] || ""}
                                     onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
@@ -162,7 +162,7 @@ export function SiteForm({ site, formData, setFormData, isReadOnly = false }: Si
                                 <Input
                                     className={`h-8 text-[11px] ${isZipField(field) ? "border-emerald-500/30 focus-visible:ring-emerald-500/50" :
                                         isCountyField(field) ? "border-blue-500/30 focus-visible:ring-blue-500/50" : ""
-                                        }`}
+                                        } ${field.required && !(formData[field.name] || "").trim() ? "border-destructive/50" : ""}`}
                                     autoComplete="off"
                                     readOnly={isReadOnly}
                                     type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}

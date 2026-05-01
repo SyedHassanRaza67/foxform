@@ -722,6 +722,22 @@ export async function registerRoutes(
       const site = await storage.getSite(siteId);
       if (!site) return res.status(404).json({ message: "Site not found" });
 
+      // --- Required field validation (server-side safety gate) ---
+      // Ensures the form never launches a browser session with missing required data.
+      const siteFields = (site.fields || []) as FormField[];
+      const missingRequired = siteFields.filter((f) => {
+        if (!f.required) return false;
+        if (f.hidden) return false;  // hidden fields are filled by the bot, skip
+        const val = (formData[f.name] ?? "").trim();
+        return val === "";
+      });
+      if (missingRequired.length > 0) {
+        const labels = missingRequired.map((f) => f.label || f.name).join(", ");
+        return res.status(400).json({
+          message: `Required fields are missing: ${labels}. Please fill all required fields before submitting.`
+        });
+      }
+
       let proxyHost: string | null = null;
       let proxyPort: number | null = null;
       let proxyLocation: string | null = null;

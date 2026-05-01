@@ -148,6 +148,35 @@ export default function AgentDashboard() {
     },
   });
 
+  /**
+   * Validate required fields and trigger submission.
+   * Blocks the mutation if any required, visible field is empty.
+   */
+  const handleSubmit = () => {
+    if (!expandedSite) return;
+    const siteFields = ((expandedSite.fields as FormField[]) || []).sort((a, b) => a.order - b.order);
+
+    // Collect required, visible (non-hidden) fields that are empty
+    const missingFields = siteFields.filter((f) => {
+      if (!f.required) return false;          // not required — skip
+      if (f.hidden) return false;             // hidden field — skip
+      const val = (formData[f.name] ?? "").trim();
+      return val === "";
+    });
+
+    if (missingFields.length > 0) {
+      const labels = missingFields.map((f) => f.label || f.name).join(", ");
+      toast({
+        title: "Required fields missing",
+        description: `Please fill in: ${labels}`,
+        variant: "destructive",
+      });
+      return; // Block submission
+    }
+
+    submitMutation.mutate();
+  };
+
   // True from click → until step is complete/error
   const isBusy =
     submitMutation.isPending ||
@@ -387,7 +416,7 @@ export default function AgentDashboard() {
 
             <Button
               className="w-full h-10 font-bold tracking-tight shadow-lg shadow-primary/20"
-              onClick={() => submitMutation.mutate()}
+              onClick={handleSubmit}
               disabled={submitMutation.isPending || isBusy}
               data-testid="button-submit-form"
             >
