@@ -1003,40 +1003,61 @@ export async function autoFillForm(
 
         const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
           try {
-            // Step 1: Scroll submit button into view smoothly
-            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-            await sleep(randomDelay(500, 1000)); // Let the page fully settle after scroll
+            // Step 1: Scroll submit button into view INSTANTLY (smooth scroll causes moving targets)
+            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
+            await sleep(randomDelay(300, 600)); // Let the page fully settle after scroll
 
             // Step 2: Get the exact bounding box of the button
-            const box = await elHandle.boundingBox();
+            let box = await elHandle.boundingBox();
             if (!box || box.width === 0 || box.height === 0) {
               throw new Error('Button has no visible bounding box');
             }
 
             // Step 3: Pick a randomised landing point within the inner 50% of the button
             // (not always the dead center — humans click slightly off-center)
-            const clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
-            const clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
+            let clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
+            let clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
+
+            // Verify if the element is actually clickable at this point or if it's covered by a sticky header/overlay
+            let isClickable = await page.evaluate((x: number, y: number, node: Element) => {
+              const elAtPoint = document.elementFromPoint(x, y);
+              return elAtPoint === node || node.contains(elAtPoint) || (elAtPoint && elAtPoint.closest && elAtPoint.closest('button, input[type="submit"]') === node);
+            }, clickX, clickY, elHandle).catch(() => true);
+
+            if (!isClickable) {
+              console.warn(`[browser] Submit button is obscured at (${Math.round(clickX)}, ${Math.round(clickY)}). Adjusting scroll to avoid sticky header/footer.`);
+              await page.evaluate(() => window.scrollBy(0, -150)); // Scroll up slightly to avoid sticky footers
+              await sleep(300);
+              const newBox = await elHandle.boundingBox();
+              if (newBox) {
+                box = newBox;
+                clickX = box.x + box.width * (0.25 + Math.random() * 0.50);
+                clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
+              }
+            }
 
             // Step 4: Approach from a natural random offset (simulate cursor arriving from elsewhere)
             const approachOffsetX = randomDelay(-120, 120);
             const approachOffsetY = randomDelay(-60, 60);
-            await page.mouse.move(clickX + approachOffsetX, clickY + approachOffsetY);
-            await sleep(randomDelay(60, 120));
+            const startX = clickX + approachOffsetX;
+            const startY = clickY + approachOffsetY;
 
-            // Step 5: Move toward the button in steps (natural arc, not a teleport)
-            const midX = clickX + approachOffsetX * 0.4;
-            const midY = clickY + approachOffsetY * 0.4;
-            await page.mouse.move(midX, midY, { steps: randomDelay(4, 8) });
-            await sleep(randomDelay(40, 80));
-            await page.mouse.move(clickX, clickY, { steps: randomDelay(3, 6) });
+            await page.mouse.move(startX, startY);
+            await sleep(randomDelay(40, 90));
+
+            // Step 5: Move toward the button in steps (natural arc, not a straight line)
+            const midX = startX + (clickX - startX) * 0.5 + randomDelay(-20, 20);
+            const midY = startY + (clickY - startY) * 0.5 + randomDelay(-15, 15);
+            await page.mouse.move(midX, midY, { steps: randomDelay(4, 7) });
+            await sleep(randomDelay(20, 50));
+            await page.mouse.move(clickX, clickY, { steps: randomDelay(4, 7) });
 
             // Step 6: Hover pause — human notices the button before pressing
-            await sleep(randomDelay(120, 280));
+            await sleep(randomDelay(150, 300));
 
             // Step 7: Fire physical mousedown → hold → mouseup (isTrusted=true sequence)
             await page.mouse.down();
-            await sleep(randomDelay(80, 160));  // realistic press hold time
+            await sleep(randomDelay(70, 150));  // realistic press hold time
             await page.mouse.up();
 
             console.log(`[browser] Clicked submit with full human mouse trajectory (${context}) at (${Math.round(clickX)}, ${Math.round(clickY)})`);
