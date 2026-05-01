@@ -1213,11 +1213,10 @@ export async function autoFillForm(
         if (clickFired) totalClicksFired++;
 
         // --- Step 4: Click was fired — wait for confirmation ---
-        // Wait up to 15s to confirm, but cap it at the remaining SUBMISSION_PHASE_MAX_MS
+        // We now only allow 1 successful click to prevent double submissions.
+        // Give it all the remaining time in the phase budget.
         const timeElapsed = Date.now() - submissionStartTime;
-        const timeRemaining = Math.max(3000, SUBMISSION_PHASE_MAX_MS - timeElapsed);
-        // Each attempt gets at most 12s to detect confirmation, but never more than what's left
-        const confirmationTimeout = Math.min(12000, timeRemaining);
+        const confirmationTimeout = Math.max(5000, SUBMISSION_PHASE_MAX_MS - timeElapsed);
         const deadline = Date.now() + confirmationTimeout;
 
         // Watch for any XHR/fetch fired after clicking — strong sign form was processed
@@ -1321,7 +1320,16 @@ export async function autoFillForm(
         if (submissionConfirmed) break;
         console.log(`[browser] Submit attempt ${attempt} completed (click fired, confirmation not yet reached)`);
 
-        // Short back-off between retry attempts
+        if (lastErrorDetail) {
+          break; // Validation error visible — retrying click won't help
+        }
+
+        if (clickFired) {
+          console.log(`[browser] Preventing double-submission by not clicking again.`);
+          break; // We clicked successfully, stop the retry loop
+        }
+
+        // Short back-off between retry attempts (only reached if NO click fired)
         if (attempt < 3) {
           const retryBackoff = randomDelay(1000, 2000);
           console.log(`[browser] Waiting ${retryBackoff}ms before retry attempt ${attempt + 1}`);
@@ -1335,10 +1343,9 @@ export async function autoFillForm(
     }
 
     // --- Optimistic success fallback ---
-    // ONLY activate if ALL 3 attempts fired clicks AND we have no visible errors.
-    // Requiring all 3 clicks avoids false-positive "success" when the button
-    // wasn't actually found or the form's JS prevented processing.
-    if (!submissionConfirmed && totalClicksFired >= 3 && !lastErrorDetail) {
+    // ONLY activate if we fired at least 1 click AND we have no visible errors.
+    // We wait extra time to catch delayed AJAX success messages / SPA transitions.
+    if (!submissionConfirmed && totalClicksFired >= 1 && !lastErrorDetail) {
       // Extra 5s wait to catch delayed AJAX success messages / SPA transitions
       onProgress({ step: "submitting", detail: "Waiting for final confirmation...", percent: 96, timestamp: Date.now() });
       await sleep(5000);
