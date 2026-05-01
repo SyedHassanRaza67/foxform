@@ -965,8 +965,9 @@ export async function autoFillForm(
     ];
 
     // --- Submission Phase (Attempts 1-3) ---
-    // Total submission phase capped at 20 seconds to keep the overall run under 60s.
-    const SUBMISSION_PHASE_MAX_MS = 20000;
+    // Budget: 40s total. Each attempt gets up to 12s to detect confirmation.
+    // This leaves room for 3 full attempts without any being starved.
+    const SUBMISSION_PHASE_MAX_MS = 40000;
     const submissionStartTime = Date.now();
     let submissionConfirmed = false;
     let lastErrorDetail = "";
@@ -1193,9 +1194,15 @@ export async function autoFillForm(
         // --- Step 4: Click was fired — wait for confirmation ---
         // Wait up to 15s to confirm, but cap it at the remaining SUBMISSION_PHASE_MAX_MS
         const timeElapsed = Date.now() - submissionStartTime;
-        const timeRemaining = Math.max(1000, SUBMISSION_PHASE_MAX_MS - timeElapsed);
-        const confirmationTimeout = Math.min(15000, timeRemaining);
+        const timeRemaining = Math.max(3000, SUBMISSION_PHASE_MAX_MS - timeElapsed);
+        // Each attempt gets at most 12s to detect confirmation, but never more than what's left
+        const confirmationTimeout = Math.min(12000, timeRemaining);
         const deadline = Date.now() + confirmationTimeout;
+
+        // Watch for any XHR/fetch fired after clicking — strong sign form was processed
+        let networkActivityDetected = false;
+        const networkListener = (req: any) => { networkActivityDetected = true; };
+        try { page.on('request', networkListener); } catch { }
         while (Date.now() < deadline) {
           await sleep(500);
 
@@ -1275,7 +1282,20 @@ export async function autoFillForm(
               break;
             }
           }
+          // Network activity after click = form likely sent data to server
+          if (networkActivityDetected) {
+            // Only treat as confirmed if we also see the body changed or URL changed
+            const bodyNowFinal = await page.evaluate(() =>
+              document.body?.innerText?.toLowerCase().slice(0, 2000) || ""
+            ).catch(() => "");
+            if (bodyNowFinal !== bodyBefore.toLowerCase() || page.url() !== urlBefore) {
+              console.log('[browser] Submit confirmed via network activity + DOM/URL change');
+              submissionConfirmed = true;
+              break;
+            }
+          }
         }
+        try { page.off('request', networkListener); } catch { }
 
         if (submissionConfirmed) break;
         console.log(`[browser] Submit attempt ${attempt} completed (click fired, confirmation not yet reached)`);
@@ -1294,24 +1314,38 @@ export async function autoFillForm(
     }
 
     // --- Optimistic success fallback ---
-    // If we fired clicks on all 3 attempts but never got explicit confirmation,
-    // and there's no visible error text on the page now, treat as success.
-    // Many sites silently accept submissions without a redirect or "thank you" message.
-    if (!submissionConfirmed && totalClicksFired >= 1 && !lastErrorDetail) {
-      const hasVisibleError = await page.evaluate((patterns: string[]) => {
-        const bodyText = document.body?.innerText?.toLowerCase() || "";
-        if (!patterns.some(p => bodyText.includes(p))) return false;
-        // A pattern match in body text alone isn't enough — require a visible error element
-        const errorEls = Array.from(document.querySelectorAll(
-          '.error, .alert-danger, .invalid-feedback, [class*="error"], [id*="error"]'
-        )) as HTMLElement[];
-        return errorEls.some(el => el.offsetParent !== null && el.innerText.trim().length > 0);
-      }, ERROR_PATTERNS).catch(() => false);
+    // ONLY activate if ALL 3 attempts fired clicks AND we have no visible errors.
+    // Requiring all 3 clicks avoids false-positive "success" when the button
+    // wasn't actually found or the form's JS prevented processing.
+    if (!submissionConfirmed && totalClicksFired >= 3 && !lastErrorDetail) {
+      // Extra 5s wait to catch delayed AJAX success messages / SPA transitions
+      onProgress({ step: "submitting", detail: "Waiting for final confirmation...", percent: 96, timestamp: Date.now() });
+      await sleep(5000);
 
-      if (!hasVisibleError) {
-        console.log(`[browser] Optimistic success — ${totalClicksFired} click(s) fired, no visible error text. Treating as success.`);
-        onProgress({ step: "complete", detail: "Submitted (no redirect detected — treating as success)", percent: 100, timestamp: Date.now() });
+      // Re-check URL and body one last time
+      const finalUrl = page.url();
+      const finalBody = await page.evaluate(() => document.body?.innerText?.toLowerCase().slice(0, 2000) || "").catch(() => "");
+      if (finalUrl !== urlBefore) {
+        console.log('[browser] Optimistic: URL changed after wait — confirmed.');
         submissionConfirmed = true;
+      } else if (SUCCESS_PATTERNS.some(p => finalBody.includes(p))) {
+        console.log('[browser] Optimistic: success text appeared after wait — confirmed.');
+        submissionConfirmed = true;
+      } else {
+        const hasVisibleError = await page.evaluate((patterns: string[]) => {
+          const bodyText = document.body?.innerText?.toLowerCase() || "";
+          if (!patterns.some(p => bodyText.includes(p))) return false;
+          const errorEls = Array.from(document.querySelectorAll(
+            '.error, .alert-danger, .invalid-feedback, [class*="error"], [id*="error"]'
+          )) as HTMLElement[];
+          return errorEls.some(el => el.offsetParent !== null && el.innerText.trim().length > 0);
+        }, ERROR_PATTERNS).catch(() => false);
+
+        if (!hasVisibleError) {
+          console.log(`[browser] Optimistic success — all 3 clicks fired, no visible error. Treating as success.`);
+          onProgress({ step: "complete", detail: "Submitted (no redirect detected — treating as success)", percent: 100, timestamp: Date.now() });
+          submissionConfirmed = true;
+        }
       }
     }
 
