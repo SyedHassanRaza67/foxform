@@ -110,69 +110,77 @@ async function applyUSTimezone(page: any): Promise<string> {
 }
 
 /**
- * Types a string character-by-character with human-like variable delays.
- * Includes occasional "thinking pauses" to mimic real user behaviour.
+ * Types a string character-by-character at a natural human speed (~70–100 WPM).
+ * Includes occasional micro-pauses to mimic natural rhythm variation.
  */
 async function typeHumanLike(page: any, value: string): Promise<void> {
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
 
-    // Occasional thinking pause (≈8% chance) — natural hesitation mid-word
-    if (i > 0 && Math.random() < 0.08) {
-      await sleep(randomDelay(300, 700));
+    // Occasional thinking micro-pause (~6% chance) — natural hesitation
+    if (i > 0 && Math.random() < 0.06) {
+      await sleep(randomDelay(120, 280));
     }
 
-    // Realistic per-keystroke delays — much closer to average human WPM (~40-60)
-    // Inside a word: 120–220ms; at spaces / punctuation: 180–300ms
+    // Natural typing speed ~70–100 WPM
+    // Mid-word chars: 70–130ms; boundaries/spaces/punctuation: 100–180ms
     const prevCh = i > 0 ? value[i - 1] : '';
     const isWordChar = prevCh && prevCh !== ' ' && ch !== ' ' && ch !== '.' && ch !== ',';
     const keystrokeDelay = isWordChar
-      ? randomDelay(120, 220)   // mid-word characters
-      : randomDelay(180, 300);  // word boundaries / spaces / punctuation
+      ? randomDelay(70, 130)    // mid-word characters
+      : randomDelay(100, 180);  // word boundaries / spaces / punctuation
 
     await page.keyboard.type(ch, { delay: keystrokeDelay });
   }
-  // Realistic post-field pause — user glances at what they typed
-  await sleep(randomDelay(200, 450));
+  // Brief post-field glance pause
+  await sleep(randomDelay(100, 200));
 }
 
 /**
- * Moves the mouse to a random point near the element centre before interacting.
- * Simulates natural cursor movement so bot-detection heuristics see pointer activity.
+ * Moves the mouse in a natural 3-point arc toward the element centre.
+ * Approach offset → midpoint curve → target landing zone.
+ * Simulates genuine pointer movement so bot-detection sees a real cursor path.
  */
 async function humanMouseMove(page: any, elementHandle: any): Promise<void> {
   try {
     const box = await elementHandle.boundingBox();
     if (!box) return;
 
-    // Land somewhere within the middle 60% of the element
+    // Land somewhere within the middle 60% of the element (humans don't click dead-center)
     const targetX = box.x + box.width  * (0.2 + Math.random() * 0.6);
     const targetY = box.y + box.height * (0.2 + Math.random() * 0.6);
 
-    // Approach from a random nearby starting offset
-    const startX = targetX + randomDelay(-60, 60);
-    const startY = targetY + randomDelay(-30, 30);
+    // Start from a random offset — simulates cursor arriving from elsewhere on the page
+    const approachX = targetX + randomDelay(-80, 80) * (Math.random() > 0.5 ? 1 : -1);
+    const approachY = targetY + randomDelay(-40, 40) * (Math.random() > 0.5 ? 1 : -1);
 
-    await page.mouse.move(startX, startY);
-    await sleep(randomDelay(20, 60));
+    // Midpoint slightly off the straight line — creates a natural arc
+    const midX = approachX + (targetX - approachX) * 0.5 + randomDelay(-15, 15);
+    const midY = approachY + (targetY - approachY) * 0.5 + randomDelay(-10, 10);
+
+    // Move: start → arc midpoint → target (3-point natural curve)
+    await page.mouse.move(approachX, approachY);
+    await sleep(randomDelay(15, 35));
+    await page.mouse.move(midX, midY, { steps: randomDelay(4, 7) });
+    await sleep(randomDelay(10, 25));
     await page.mouse.move(targetX, targetY, { steps: randomDelay(4, 8) });
-    await sleep(randomDelay(30, 90));
+    await sleep(randomDelay(20, 50)); // hover before clicking
   } catch {
     // Non-fatal — continue without mouse simulation
   }
 }
 
 /**
- * Scrolls the element into view with a small random offset and waits briefly,
- * mimicking a human pausing to read the field before typing.
+ * Scrolls the element into view and waits briefly —
+ * mimicking a human pausing to notice the field before typing.
  */
 async function humanScrollTo(page: any, selector: string): Promise<void> {
   try {
     await page.evaluate((sel: string) => {
       const el = document.querySelector(sel);
-      if (el) el.scrollIntoView({ behavior: 'auto', block: 'center' }); // Use auto to prevent bounding box animation drift
+      if (el) el.scrollIntoView({ behavior: 'auto', block: 'center' });
     }, selector);
-    await sleep(randomDelay(100, 250));
+    await sleep(randomDelay(60, 130)); // brief pause after scroll settles
   } catch {
     // Ignore
   }
@@ -224,29 +232,30 @@ async function fillFieldHuman(
   selector: string,
   value: string
 ): Promise<void> {
-  // Step 1: Scroll the field into view so the user can see it
+  // Step 1: Scroll field into view
   await humanScrollTo(page, selector);
 
-  // Step 2: Pause — as if the user is reading the field label
-  await sleep(randomDelay(300, 700));
+  // Step 2: Reading pause — user notices and reads the field label
+  await sleep(randomDelay(150, 320));
 
   const handle = await page.$(selector);
 
-  // Step 3: Move mouse naturally toward the field (visual tracking)
+  // Step 3: Move mouse naturally to the field via a 3-point arc
   if (handle) {
     await humanMouseMove(page, handle);
-    await sleep(randomDelay(100, 250)); // hover pause before clicking
+    // humanMouseMove already ends with a hover pause; small extra settle time
+    await sleep(randomDelay(20, 50));
   }
 
-  // Step 4: Click to focus the input (triple-click selects any existing text)
-  await page.click(selector, { clickCount: 3, delay: randomDelay(40, 80) });
-  await sleep(randomDelay(120, 280));
+  // Step 4: Click to focus (triple-click selects any existing text)
+  await page.click(selector, { clickCount: 3, delay: randomDelay(30, 60) });
+  await sleep(randomDelay(80, 160));
 
   // Step 5: Clear any pre-filled value
   await page.keyboard.press('Backspace');
-  await sleep(randomDelay(60, 130));
+  await sleep(randomDelay(30, 60));
 
-  // Step 6: Type character-by-character with realistic human speed
+  // Step 6: Type character-by-character at natural human speed
   try {
     await typeHumanLike(page, value);
   } catch {
@@ -254,10 +263,10 @@ async function fillFieldHuman(
     await fillInputNative(page, selector, value);
   }
 
-  // Step 7: Pause after typing — user re-reads what they just typed
-  await sleep(randomDelay(200, 500));
+  // Step 7: Brief post-type pause — user reviews what they typed
+  await sleep(randomDelay(80, 160));
 
-  // Step 8: Tab away (or blur) to commit the value
+  // Step 8: Tab away (60%) or blur (40%) to commit the value
   if (Math.random() < 0.6) {
     await page.keyboard.press('Tab');
   } else {
@@ -266,7 +275,7 @@ async function fillFieldHuman(
       el?.blur();
     }, selector);
   }
-  await sleep(randomDelay(150, 300));
+  await sleep(randomDelay(60, 120));
 }
 
 /**
@@ -420,51 +429,55 @@ export async function autoFillForm(
     checkAbort();
     onProgress({ step: "launching", detail: "Launching", percent: 5, timestamp: Date.now() });
 
-    // Dynamic imports to save cold-start time and memory on Vercel
+    // Dynamic imports to save cold-start time and memory
     const { default: puppeteerExtra } = await import("puppeteer-extra");
     const { default: StealthPlugin } = await import("puppeteer-extra-plugin-stealth");
-    const { default: puppeteer } = await import("puppeteer"); // Assuming puppeteer is also needed
+    const { default: puppeteer } = await import("puppeteer");
 
     puppeteerExtra.use(StealthPlugin());
 
-    const launchArgs = [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--window-size=1920,1080",
-    ];
+    /**
+     * Launch a fresh browser with the given proxy (or no proxy if proxyConf is null).
+     * A new launch is mandatory on every tunnel-error retry because HTTPS CONNECT
+     * tunnels cannot be re-established on the same Chromium process/socket.
+     */
+    const launchBrowser = async (proxyConf: ProxyConfig | null) => {
+      if (browser) {
+        try { await browser.close(); } catch { }
+        browser = null;
+        page = null;
+      }
+      const args = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--window-size=1920,1080",
+      ];
+      if (proxyConf) {
+        args.push(`--proxy-server=${proxyConf.protocol}://${proxyConf.host}:${proxyConf.port}`);
+      }
+      browser = await puppeteerExtra.launch({
+        headless: true,
+        executablePath: puppeteer.executablePath(),
+        args,
+      });
+      page = await browser.newPage();
+      await applyUSTimezone(page);
+      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      );
+      if (proxyConf?.username && proxyConf?.password) {
+        await page.authenticate({ username: proxyConf.username, password: proxyConf.password });
+      }
+    };
 
-    if (proxy) {
-      launchArgs.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
-    }
-
-    browser = await puppeteerExtra.launch({
-      headless: true,
-      executablePath: puppeteer.executablePath(),
-      args: launchArgs,
-    });
+    // Initial launch with the primary (ZIP) proxy
+    await launchBrowser(proxy);
     checkAbort();
+    console.log(`[browser] Browser launched, navigating to ${url}`);
 
-    page = await browser.newPage();
-    console.log(`[browser] New page created, navigating to ${url}`);
-
-    // Apply full US timezone emulation (CDP + Intl + Date API) BEFORE navigation
-    // so TrustedForm script sees the correct US time from the very first tick.
-    await applyUSTimezone(page);
-
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
-
-    if (proxy && proxy.username && proxy.password) {
-      await page.authenticate({ username: proxy.username, password: proxy.password });
-    }
-
-    // Navigate with automatic retry. Two phases:
-    //   Phase 1: zip-based proxy — up to 3 attempts with exponential backoff
-    //   Phase 2: state-based fallback proxy (if provided) — up to 2 attempts
     const isTunnelError = (err: any) =>
       err?.message?.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
       err?.message?.includes("ERR_PROXY_CONNECTION_FAILED") ||
@@ -474,31 +487,30 @@ export async function autoFillForm(
     const MAX_ZIP_ATTEMPTS = 3;
     let lastTunnelErr: any = null;
 
-    // Phase 1 — ZIP proxy
+    // Phase 1 — Primary (ZIP) proxy: up to 3 attempts, restarting browser each retry
     for (let attempt = 1; attempt <= MAX_ZIP_ATTEMPTS; attempt++) {
       const label = attempt > 1 ? ` (retry ${attempt}/${MAX_ZIP_ATTEMPTS})` : "";
       onProgress({ step: "navigating", detail: `Navigating${label}`, percent: 10, timestamp: Date.now() });
       checkAbort();
       try {
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
         lastTunnelErr = null;
         break; // success
       } catch (err: any) {
         if (isTunnelError(err)) {
+          lastTunnelErr = err;
           if (attempt < MAX_ZIP_ATTEMPTS) {
             const waitMs = 3000 * attempt;
             onProgress({
               step: "field_warning",
-              detail: `Connection failed, retrying in ${waitMs / 1000}s... (${attempt}/${MAX_ZIP_ATTEMPTS})`,
+              detail: `Tunnel failed, retrying (${attempt}/${MAX_ZIP_ATTEMPTS})...`,
               percent: 12,
               timestamp: Date.now(),
             });
-            await sleep(waitMs);
-            if (proxy?.username && proxy?.password) {
-              await page.authenticate({ username: proxy.username, password: proxy.password });
-            }
-          } else {
-            lastTunnelErr = err; // exhausted zip attempts
+            await sleep(1500 * attempt);
+            // MUST relaunch — tunnel connections can't recover on same process
+            await launchBrowser(proxy);
+            checkAbort();
           }
         } else {
           // Non-tunnel error (e.g. DNS failure, invalid URL, HTTPS error)
@@ -508,41 +520,82 @@ export async function autoFillForm(
       }
     }
 
-    // Phase 2 — State fallback (only if zip failed with tunnel errors)
-    if (lastTunnelErr) {
-      if (fallbackProxy) {
+    // Phase 2 — Fallback proxy (if provided): up to 3 attempts, restarting browser each retry
+    if (lastTunnelErr && fallbackProxy) {
+      onProgress({
+        step: "field_warning",
+        detail: "Switching to alternate proxy...",
+        percent: 13,
+        timestamp: Date.now(),
+      });
+
+      const MAX_FALLBACK_ATTEMPTS = 3;
+      let fallbackErr: any = null;
+      for (let attempt = 1; attempt <= MAX_FALLBACK_ATTEMPTS; attempt++) {
         onProgress({
-          step: "field_warning",
-          detail: "Switching to alternate connection...",
-          percent: 13,
+          step: "navigating",
+          detail: `Navigating via alternate proxy (${attempt}/${MAX_FALLBACK_ATTEMPTS})`,
+          percent: 14,
           timestamp: Date.now(),
         });
-        await page.authenticate({ username: fallbackProxy.username, password: fallbackProxy.password });
-
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          onProgress({
-            step: "navigating",
-            detail: `Navigating via alternate proxy (${attempt}/2)`,
-            percent: 14,
-            timestamp: Date.now(),
-          });
-          try {
-            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-            break; // success
-          } catch (err: any) {
-            if (attempt < 2) {
-              await sleep(3000);
-              await page.authenticate({ username: fallbackProxy.username, password: fallbackProxy.password });
-            } else {
-              throw new Error(
-                `Both ZIP (${proxy?.label ?? "zip"}) and state (${fallbackProxy.label ?? "state"}) proxies failed. ` +
-                `Last error: ${err.message}`
-              );
-            }
+        checkAbort();
+        // Relaunch with fallback proxy credentials
+        await launchBrowser(fallbackProxy);
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+          lastTunnelErr = null;
+          fallbackErr = null;
+          break; // success
+        } catch (err: any) {
+          fallbackErr = err;
+          if (attempt < MAX_FALLBACK_ATTEMPTS) {
+            await sleep(1000 * attempt);
           }
         }
-      } else {
-        throw lastTunnelErr; // no fallback available
+      }
+      if (lastTunnelErr && fallbackErr) {
+        // Phase 3 — Direct connection (no proxy) as last resort
+        onProgress({
+          step: "field_warning",
+          detail: "Both proxies failed — trying direct connection...",
+          percent: 15,
+          timestamp: Date.now(),
+        });
+        console.warn(`[browser] All proxy attempts failed. Falling back to direct connection.`);
+        await launchBrowser(null);
+        checkAbort();
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
+          lastTunnelErr = null;
+        } catch (directErr: any) {
+          throw new Error(
+            `All connection attempts failed. ` +
+            `ZIP proxy error: ${lastTunnelErr?.message}. ` +
+            `Fallback proxy error: ${fallbackErr?.message}. ` +
+            `Direct connection error: ${directErr?.message}.`
+          );
+        }
+      }
+    } else if (lastTunnelErr && !fallbackProxy) {
+      // No fallback proxy — try direct connection before giving up
+      onProgress({
+        step: "field_warning",
+        detail: "Proxy tunnel failed — trying direct connection...",
+        percent: 14,
+        timestamp: Date.now(),
+      });
+      console.warn(`[browser] Primary proxy failed, no fallback configured. Trying direct connection.`);
+      await launchBrowser(null);
+      checkAbort();
+      try {
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
+        lastTunnelErr = null;
+      } catch (directErr: any) {
+        throw new Error(
+          `Proxy tunnel failed and direct connection also failed. ` +
+          `Proxy error: ${lastTunnelErr?.message}. ` +
+          `Direct error: ${directErr?.message}.`
+        );
       }
     }
     await sleep(randomDelay(200, 500));
@@ -789,7 +842,7 @@ export async function autoFillForm(
 
           // Step 6: Close the dropdown cleanly
           await page.keyboard.press('Escape');
-          await sleep(randomDelay(400, 800));
+          await sleep(randomDelay(100, 200));
         } else {
           await page.waitForSelector(field.selector, { timeout: 8000 });
 
@@ -813,29 +866,44 @@ export async function autoFillForm(
         });
       }
 
-      // Inter-field pause — deliberate gap between fields like a real human
-      // First field: shorter (just getting started); later fields: 2–4 seconds
+      // Inter-field pause — natural gap as user moves to next field
       const baseDelay = i === 0
-        ? randomDelay(600, 1200)
+        ? randomDelay(300, 600)    // just getting started
         : i < 3
-          ? randomDelay(1200, 2200)
-          : randomDelay(1800, 3200);
+          ? randomDelay(500, 900)  // picking up rhythm
+          : randomDelay(600, 1100); // settled pace
       await sleep(baseDelay);
     }
 
-    onProgress({ step: "fields_complete", detail: "All fields saved", percent: 82, timestamp: Date.now() });
+    onProgress({ step: "fields_complete", detail: "All fields saved", percent: 80, timestamp: Date.now() });
     checkAbort();
 
-    // Review pause before submit — user glances over the filled form
-    await sleep(randomDelay(1500, 3000));
-
-    // Occasionally do a quick scroll-up review (35% chance)
-    if (Math.random() < 0.35) {
-      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-      await sleep(randomDelay(600, 1200));
-      await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
-      await sleep(randomDelay(500, 900));
+    // --- Pre-submit field verification ---
+    // Re-fill any field whose value somehow ended up blank (React state flush timing issue).
+    // This is the #1 cause of form validation errors on first submission attempt.
+    onProgress({ step: "filling_field", detail: "Verifying fields...", percent: 81, timestamp: Date.now() });
+    for (const field of filledFields) {
+      if (!field.selector || field.type === 'checkbox' || field.type === 'radio' || field.type === 'select') continue;
+      try {
+        const currentVal = await page.$eval(
+          field.selector,
+          (el: any) => (el.value || el.innerText || '').trim()
+        ).catch(() => '');
+        if (!currentVal) {
+          console.warn(`[browser] Field "${field.name}" is empty before submit — re-filling...`);
+          await fillInputNative(page, field.selector, formData[field.name]);
+          await sleep(randomDelay(100, 200));
+        }
+      } catch { /* non-fatal */ }
     }
+
+    // Let AJAX/debounce handlers settle before submitting
+    try {
+      await page.waitForNetworkIdle({ timeout: 3000 });
+    } catch { /* fine if never idle */ }
+
+    // Natural review pause before submit — user scans the completed form
+    await sleep(randomDelay(600, 1200));
 
     // --- "I Agree" / consent checkbox detection ---
     // Many lead-gen forms have a final consent checkbox before the submit button.
@@ -897,8 +965,8 @@ export async function autoFillForm(
     ];
 
     // --- Submission Phase (Attempts 1-3) ---
-    // User requested the entire submission confirmation phase to complete within 45 seconds.
-    const SUBMISSION_PHASE_MAX_MS = 45000;
+    // Total submission phase capped at 20 seconds to keep the overall run under 60s.
+    const SUBMISSION_PHASE_MAX_MS = 20000;
     const submissionStartTime = Date.now();
     let submissionConfirmed = false;
     let lastErrorDetail = "";
@@ -1057,7 +1125,7 @@ export async function autoFillForm(
           }
         }
 
-        // --- Step 3: Last resort A — click the last visible button or submit the form ---
+        // --- Step 3: Last resort A — click the last visible button ---
         if (!clickFired) {
           const elHandle = await page.evaluateHandle(() => {
             const allBtns = Array.from(document.querySelectorAll(
@@ -1073,6 +1141,44 @@ export async function autoFillForm(
           const el = elHandle.asElement();
           if (el) {
             clickFired = await attemptTrustedClick(el, "Last resort visible button");
+          }
+        }
+
+        // --- Step 4: Nuclear fallback — directly submit the <form> element ---
+        // Used when every button-click strategy fails (e.g. heavily React-controlled forms
+        // that prevent default and re-dispatch events only from form.submit()).
+        if (!clickFired) {
+          console.warn('[browser] All button clicks failed — trying form.submit() nuclear fallback');
+          const submitted = await page.evaluate((submitSel: string | null) => {
+            // 1. Try configured submit selector first
+            if (submitSel) {
+              const btn = document.querySelector(submitSel) as HTMLElement | null;
+              if (btn) { btn.click(); return true; }
+            }
+            // 2. Find any visible submit button and click it
+            const btns = Array.from(document.querySelectorAll(
+              'button[type="submit"], input[type="submit"], button:not([type])'
+            )) as HTMLElement[];
+            const visible = btns.find(b => {
+              const r = b.getBoundingClientRect();
+              return r.width > 0 && r.height > 0 && !(b as HTMLButtonElement).disabled;
+            });
+            if (visible) { visible.click(); return true; }
+            // 3. Submit the form element directly
+            const form = document.querySelector('form') as HTMLFormElement | null;
+            if (form) {
+              // Dispatch submit event first so listeners fire, then call native submit
+              const evt = new Event('submit', { bubbles: true, cancelable: true });
+              const notCancelled = form.dispatchEvent(evt);
+              if (notCancelled) form.submit();
+              return true;
+            }
+            return false;
+          }, submitSelector).catch(() => false);
+
+          if (submitted) {
+            console.log('[browser] Nuclear form.submit() fallback fired');
+            clickFired = true;
           }
         }
 
@@ -1174,10 +1280,9 @@ export async function autoFillForm(
         if (submissionConfirmed) break;
         console.log(`[browser] Submit attempt ${attempt} completed (click fired, confirmation not yet reached)`);
 
-        // Back-off between retry attempts — real humans don't click again instantly.
-        // This also gives AJAX handlers and tracking pixels time to settle.
+        // Short back-off between retry attempts
         if (attempt < 3) {
-          const retryBackoff = randomDelay(4000, 7000);
+          const retryBackoff = randomDelay(1000, 2000);
           console.log(`[browser] Waiting ${retryBackoff}ms before retry attempt ${attempt + 1}`);
           await sleep(retryBackoff);
         }
@@ -1272,43 +1377,65 @@ export async function extractTrustedFormData(
     const { default: puppeteer } = await import("puppeteer");
     puppeteerExtra.use(StealthPlugin());
 
-    const launchArgs = [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--window-size=1280,800",
-    ];
+    /**
+     * (Re)launch the browser and return a fully configured page.
+     * A new launch is needed on every tunnel-error retry — HTTPS CONNECT
+     * tunnels cannot be recovered on the same Chromium process.
+     */
+    const launchPage = async (): Promise<any> => {
+      if (browser) {
+        try { await browser.close(); } catch { }
+        browser = null;
+      }
+      const args = [
+        "--no-sandbox", "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage", "--disable-gpu", "--window-size=1280,800",
+      ];
+      if (proxy) args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
+      browser = await puppeteerExtra.launch({
+        headless: true,
+        executablePath: puppeteer.executablePath(),
+        args,
+      });
+      const pg = await browser.newPage();
+      // Apply full US timezone emulation BEFORE navigation so TrustedForm
+      // records a US local time in the cert (not the server's GMT+5).
+      await applyUSTimezone(pg);
+      await pg.setViewport({ width: 1280, height: 800 });
+      await pg.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      );
+      if (proxy?.username && proxy?.password) {
+        await pg.authenticate({ username: proxy.username, password: proxy.password });
+      }
+      return pg;
+    };
 
-    if (proxy) {
-      launchArgs.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`);
-    }
+    const isTunnelErr = (e: any) =>
+      e?.message?.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
+      e?.message?.includes("ERR_PROXY_CONNECTION_FAILED") ||
+      e?.message?.includes("net::ERR_");
 
-    browser = await puppeteerExtra.launch({
-      headless: true,
-      executablePath: puppeteer.executablePath(),
-      args: launchArgs,
-    });
+    // Use mutable `let` so we can replace the page on each browser restart
+    let page = await launchPage();
 
-    const page = await browser.newPage();
-
-    // Apply full US timezone emulation BEFORE navigation so TrustedForm
-    // records a US local time in the cert (not the server's GMT+5).
-    await applyUSTimezone(page);
-
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
-
-    if (proxy?.username && proxy?.password) {
-      await page.authenticate({ username: proxy.username, password: proxy.password });
-    }
-
-    try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-    } catch {
-      // Non-fatal — try to scrape anyway
+    // Navigate with up to 3 retries; each retry fully relaunches the browser
+    // because a broken HTTPS tunnel can never recover on the same process.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        break; // success — exit retry loop
+      } catch (navErr: any) {
+        if (isTunnelErr(navErr) && attempt < 3) {
+          console.warn(`[trusted-form] Tunnel error (attempt ${attempt}), restarting browser...`);
+          await sleep(2000 * attempt);
+          page = await launchPage(); // fresh browser + page; old one is closed inside launchPage
+        } else {
+          // Non-tunnel error or final attempt — proceed to scrape whatever loaded
+          console.warn(`[trusted-form] Navigation failed (attempt ${attempt}): ${navErr?.message}`);
+          break;
+        }
+      }
     }
 
     // Poll for up to 15 s for TrustedForm / Journaya inputs to populate
