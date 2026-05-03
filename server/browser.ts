@@ -110,31 +110,31 @@ async function applyUSTimezone(page: any): Promise<string> {
 }
 
 /**
- * Types a string character-by-character at a natural human speed (~70–100 WPM).
- * Includes occasional micro-pauses to mimic natural rhythm variation.
+ * Types a string character-by-character at a human-like speed.
+ * Speed rule:
+ *   • value.length <  15 → 500 ms per digit  (±50 ms jitter)
+ *   • value.length >= 15 → 400 ms per digit  (±50 ms jitter)
+ * Occasional micro-pauses (~6% chance) mimic natural hesitation.
  */
 async function typeHumanLike(page: any, value: string): Promise<void> {
+  // Base delay per character depends on total field length
+  const baseMs = value.length < 15 ? 500 : 400;
+
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
 
     // Occasional thinking micro-pause (~6% chance) — natural hesitation
     if (i > 0 && Math.random() < 0.06) {
-      await sleep(randomDelay(120, 280));
+      await sleep(randomDelay(80, 160));
     }
 
-    // Natural typing speed — slowed down per user request
-    // Short words (~5 chars) will take ~2-3 seconds of pure typing time
-    // Long words (address, ~15-20 chars) will take ~6-8 seconds
-    const prevCh = i > 0 ? value[i - 1] : '';
-    const isWordChar = prevCh && prevCh !== ' ' && ch !== ' ' && ch !== '.' && ch !== ',';
-    const keystrokeDelay = isWordChar
-      ? randomDelay(200, 450)    // slower mid-word characters
-      : randomDelay(300, 600);  // word boundaries / spaces / punctuation
+    // Per-keystroke delay: base ± 50 ms jitter for realism
+    const keystrokeDelay = baseMs + randomDelay(-50, 50);
 
     await page.keyboard.type(ch, { delay: keystrokeDelay });
   }
-  // Brief post-field glance pause
-  await sleep(randomDelay(400, 800));
+  // Very brief post-type glance
+  await sleep(randomDelay(100, 200));
 }
 
 /**
@@ -236,24 +236,24 @@ async function fillFieldHuman(
   // Step 1: Scroll field into view
   await humanScrollTo(page, selector);
 
-  // Step 2: Reading pause — user notices and reads the field label
-  await sleep(randomDelay(800, 1500));
+  // Step 2: Brief reading pause — user notices the field label (trimmed for speed)
+  await sleep(randomDelay(300, 500));
 
   const handle = await page.$(selector);
 
   // Step 3: Move mouse naturally to the field via a 3-point arc
   if (handle) {
     await humanMouseMove(page, handle);
-    await sleep(randomDelay(200, 400));
+    await sleep(randomDelay(80, 150));
   }
 
   // Step 4: Click to focus (triple-click selects any existing text)
-  await page.click(selector, { clickCount: 3, delay: randomDelay(80, 150) });
-  await sleep(randomDelay(400, 800));
+  await page.click(selector, { clickCount: 3, delay: randomDelay(60, 100) });
+  await sleep(randomDelay(100, 200));
 
   // Step 5: Clear any pre-filled value
   await page.keyboard.press('Backspace');
-  await sleep(randomDelay(100, 200));
+  await sleep(randomDelay(50, 100));
 
   // Step 6: Type character-by-character at natural human speed
   try {
@@ -263,8 +263,8 @@ async function fillFieldHuman(
     await fillInputNative(page, selector, value);
   }
 
-  // Step 7: Brief post-type pause — user reviews what they typed
-  await sleep(randomDelay(400, 800));
+  // Step 7: Very brief post-type pause
+  await sleep(randomDelay(100, 200));
 
   // Step 8: Tab away (60%) or blur (40%) to commit the value
   if (Math.random() < 0.6) {
@@ -275,7 +275,7 @@ async function fillFieldHuman(
       el?.blur();
     }, selector);
   }
-  await sleep(randomDelay(60, 120));
+  await sleep(randomDelay(40, 80));
 }
 
 /**
@@ -696,6 +696,8 @@ export async function autoFillForm(
         timestamp: Date.now(),
       });
 
+      // clickFieldHumanLocal: mouse movement + click budget = 1.5 s total
+      //   ~800 ms smooth move (steps proportional) + ~100 ms hover + ~200 ms press + ~400 ms post-click
       const clickFieldHumanLocal = async (selectorLocal: string): Promise<boolean> => {
         await humanScrollTo(page, selectorLocal);
         const elHandle = await page.$(selectorLocal);
@@ -703,13 +705,15 @@ export async function autoFillForm(
           try {
             const box = await elHandle.boundingBox();
             if (box && box.width > 0 && box.height > 0) {
-              const targetX = box.x + box.width / 2;
-              const targetY = box.y + box.height / 2;
-              await page.mouse.move(targetX, targetY, { steps: randomDelay(5, 10) });
-              await sleep(randomDelay(40, 80));
+              const targetX = box.x + box.width * (0.3 + Math.random() * 0.4);
+              const targetY = box.y + box.height * (0.3 + Math.random() * 0.4);
+              // Smooth move — total travel time ~800 ms via step count
+              await page.mouse.move(targetX, targetY, { steps: 20 });
+              await sleep(100); // hover pause
               await page.mouse.down();
-              await sleep(randomDelay(50, 100));
+              await sleep(randomDelay(80, 120)); // realistic press hold
               await page.mouse.up();
+              await sleep(randomDelay(350, 450)); // post-click settle  → total ≈1.5 s
               return true;
             }
           } catch { }
@@ -731,13 +735,14 @@ export async function autoFillForm(
           try {
             const lbox = await labelEl.boundingBox();
             if (lbox && lbox.width > 0 && lbox.height > 0) {
-              const targetX = lbox.x + lbox.width / 2;
-              const targetY = lbox.y + lbox.height / 2;
-              await page.mouse.move(targetX, targetY, { steps: randomDelay(5, 10) });
-              await sleep(randomDelay(40, 80));
+              const targetX = lbox.x + lbox.width * (0.3 + Math.random() * 0.4);
+              const targetY = lbox.y + lbox.height * (0.3 + Math.random() * 0.4);
+              await page.mouse.move(targetX, targetY, { steps: 20 });
+              await sleep(100);
               await page.mouse.down();
-              await sleep(randomDelay(50, 100));
+              await sleep(randomDelay(80, 120));
               await page.mouse.up();
+              await sleep(randomDelay(350, 450));
               return true;
             }
           } catch { }
@@ -872,13 +877,8 @@ export async function autoFillForm(
         });
       }
 
-      // Inter-field pause — natural gap as user moves to next field
-      const baseDelay = i === 0
-        ? randomDelay(300, 600)    // just getting started
-        : i < 3
-          ? randomDelay(500, 900)  // picking up rhythm
-          : randomDelay(600, 1100); // settled pace
-      await sleep(baseDelay);
+      // Inter-field pause — kept short; the 1.5 s mouse-move budget dominates
+      await sleep(randomDelay(150, 300));
     }
 
     onProgress({ step: "fields_complete", detail: "All fields saved", percent: 80, timestamp: Date.now() });
