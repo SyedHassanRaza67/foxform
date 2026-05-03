@@ -945,6 +945,38 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/agent/submissions/:id/cancel", authMiddleware, requireRole("agent"), async (req, res) => {
+    try {
+      const submissionId = req.params.id as string;
+      const controller = abortControllers.get(submissionId);
+      
+      if (controller) {
+        console.log(`[submission] [${submissionId}] Cancellation requested by user.`);
+        controller.abort();
+        
+        // Notify the UI immediately via SSE
+        sendSSE(submissionId, {
+          step: "error",
+          detail: "Submission cancelled by user",
+          percent: 100,
+          timestamp: Date.now()
+        });
+        
+        // Update DB status
+        await storage.updateSubmission(submissionId, {
+          status: "failed",
+          errorMessage: "Cancelled by user"
+        });
+        
+        return res.json({ success: true });
+      }
+      
+      return res.status(404).json({ message: "Active submission not found" });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   try {
     await storage.ensureAdmin();
     console.log("[init] Admin check completed.");

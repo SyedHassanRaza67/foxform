@@ -39,7 +39,18 @@ export default function AgentDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [siteDrafts, setSiteDrafts] = useState<Record<string, Record<string, string>>>({});
+  
+  // Get draft data for the current expanded site, or empty object if none
+  const formData = expandedSiteId ? (siteDrafts[expandedSiteId] || {}) : {};
+  
+  // Update draft data for the current expanded site
+  const setFormData = (data: Record<string, string>) => {
+    if (expandedSiteId) {
+      setSiteDrafts(prev => ({ ...prev, [expandedSiteId]: data }));
+    }
+  };
+
   const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
   const [activeProxyMethod, setActiveProxyMethod] = useState<string | null>(null);
   const [activeProxyLocation, setActiveProxyLocation] = useState<string | null>(null);
@@ -258,11 +269,9 @@ export default function AgentDashboard() {
   const handleToggleSite = (siteId: string) => {
     if (expandedSiteId === siteId) {
       setExpandedSiteId(null);
-      setFormData({});
       setLastSuccessSiteId(null);
     } else {
       setExpandedSiteId(siteId);
-      setFormData({});
       setLastSuccessSiteId(null);
     }
   };
@@ -270,7 +279,6 @@ export default function AgentDashboard() {
   const handleCloseForm = () => {
     if (!isBusy) {
       setExpandedSiteId(null);
-      setFormData({});
       setLastSuccessSiteId(null);
     }
   };
