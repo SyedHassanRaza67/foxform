@@ -453,6 +453,37 @@ export async function autoFillForm(
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--window-size=1920,1080",
+        // Additional flags for high concurrency / low RAM usage
+        "--disable-extensions",
+        "--disable-component-update",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-breakpad",
+        "--disable-client-side-phishing-detection",
+        "--disable-default-apps",
+        "--disable-domain-reliability",
+        "--disable-features=AudioServiceOutOfProcess",
+        "--disable-hang-monitor",
+        "--disable-ipc-flooding-protection",
+        "--disable-notifications",
+        "--disable-offer-store-unmasked-wallet-cards",
+        "--disable-popup-blocking",
+        "--disable-print-preview",
+        "--disable-prompt-on-repost",
+        "--disable-renderer-backgrounding",
+        "--disable-speech-api",
+        "--disable-sync",
+        "--hide-scrollbars",
+        "--metrics-recording-only",
+        "--mute-audio",
+        "--no-default-browser-check",
+        "--no-first-run",
+        "--no-pings",
+        "--no-zygote",
+        "--password-store=basic",
+        "--use-gl=swiftshader",
+        "--use-mock-keychain",
       ];
       if (proxyConf) {
         args.push(`--proxy-server=${proxyConf.protocol}://${proxyConf.host}:${proxyConf.port}`);
@@ -463,6 +494,18 @@ export async function autoFillForm(
         args,
       });
       page = await browser.newPage();
+      
+      // Optimization: Block images and media to save bandwidth/RAM for high concurrency
+      await page.setRequestInterception(true);
+      page.on('request', (req: any) => {
+        const resourceType = req.resourceType();
+        if (resourceType === 'image' || resourceType === 'media' || resourceType === 'font') {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
       await applyUSTimezone(page);
       await page.setViewport({ width: 1920, height: 1080 });
       await page.setUserAgent(

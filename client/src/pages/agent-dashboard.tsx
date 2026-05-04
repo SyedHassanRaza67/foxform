@@ -513,13 +513,13 @@ export default function AgentDashboard() {
                     <span className={
                       p.step === "error"
                         ? "text-destructive"
-                        : p.step === "field_warning" || p.step === "submit_warning"
-                          ? "text-amber-400"
+                        : p.step === "queued" || p.step === "field_warning" || p.step === "submit_warning"
+                          ? "text-amber-500"
                           : p.step === "complete"
                             ? "text-emerald-500"
                             : "text-foreground"
                     }>
-                      {p.step === "field_warning" ? "⚠ " : ""}{p.detail}
+                      {p.step === "queued" ? "⏳ " : p.step === "field_warning" ? "⚠ " : ""}{p.detail}
                     </span>
                   </div>
                 ))}

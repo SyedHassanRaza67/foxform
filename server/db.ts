@@ -11,7 +11,12 @@ if (!process.env.DATABASE_URL) {
 }
 
 console.log("[db] Initializing database connection pool...");
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({ 
+  connectionString: process.env.DATABASE_URL,
+  max: 50, // Increase pool size for high concurrency (30-40+ agents)
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
 
 pool.on('error', (err) => {
   console.error("[db] Unexpected error on idle client", err);

@@ -14,6 +14,8 @@ import { getWorkingProxy } from "./proxy-tester";
 
 const sseClients = new Map<string, import("express").Response[]>();
 const abortControllers = new Map<string, AbortController>();
+const activeSubmissions = new Set<string>();
+const MAX_CONCURRENT_SUBMISSIONS = 15; // Protect server from crashing under high concurrency (30-40 agents)
 
 function normalizeProxyHost(host: string): string {
   const stripped = host.trim().replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "").split("/")[0].trim();
@@ -840,6 +842,24 @@ export async function registerRoutes(
             const controller = new AbortController();
             abortControllers.set(submission.id, controller);
 
+            // Concurrency Management: If at capacity, notify agent and wait
+            if (activeSubmissions.size >= MAX_CONCURRENT_SUBMISSIONS) {
+              sendSSE(submission.id, { 
+                step: "queued", 
+                detail: `Server busy (${activeSubmissions.size} active). Waiting for a slot...`, 
+                percent: 2, 
+                timestamp: Date.now() 
+              });
+              
+              // Simple wait loop to avoid server crash
+              while (activeSubmissions.size >= MAX_CONCURRENT_SUBMISSIONS) {
+                if (controller.signal.aborted) return;
+                await new Promise(r => setTimeout(r, 2000));
+              }
+            }
+            
+            activeSubmissions.add(submission.id);
+
             autoFillForm(
               site.url,
               fields,
@@ -878,6 +898,7 @@ export async function registerRoutes(
               sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
             }).finally(() => {
               abortControllers.delete(submission.id);
+              activeSubmissions.delete(submission.id);
             });
 
             return res.json({
@@ -903,6 +924,23 @@ export async function registerRoutes(
 
       const controller = new AbortController();
       abortControllers.set(submission.id, controller);
+
+      // Concurrency Management: If at capacity, notify agent and wait
+      if (activeSubmissions.size >= MAX_CONCURRENT_SUBMISSIONS) {
+        sendSSE(submission.id, { 
+          step: "queued", 
+          detail: `Server busy (${activeSubmissions.size} active). Waiting for a slot...`, 
+          percent: 2, 
+          timestamp: Date.now() 
+        });
+        
+        while (activeSubmissions.size >= MAX_CONCURRENT_SUBMISSIONS) {
+          if (controller.signal.aborted) return;
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+      
+      activeSubmissions.add(submission.id);
 
       autoFillForm(
         site.url,
@@ -937,6 +975,7 @@ export async function registerRoutes(
         sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
       }).finally(() => {
         abortControllers.delete(submission.id);
+        activeSubmissions.delete(submission.id);
       });
 
       return res.json(submission);
