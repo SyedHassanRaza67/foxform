@@ -63,7 +63,7 @@ export default function AgentDashboard() {
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/agent/sites"] });
   const submissionsQuery = useQuery<any[]>({ queryKey: ["/api/agent/submissions"] });
-  const connectSSE = useCallback((submissionId: string) => {
+  const connectSSE = useCallback((submissionId: string, siteName: string) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
@@ -85,11 +85,20 @@ export default function AgentDashboard() {
           queryClient.invalidateQueries({ queryKey: ["/api/agent/submissions"] });
 
           if (progress.step === "complete") {
-            setLastSuccessSiteId(submissionId); // We use submissionId to identify the last success for the specific site
-            setExpandedSiteId(null); // Close the dropdown on success as requested
-            toast({ title: "Auto-fill complete", description: progress.detail });
+            setLastSuccessSiteId(submissionId); 
+            setExpandedSiteId(null); 
+            toast({ 
+              title: "Submission Complete", 
+              description: `The last submission of (${siteName}) success`,
+              duration: 5000,
+            });
           } else {
-            toast({ title: "Auto-fill failed", description: progress.detail, variant: "destructive" });
+            toast({ 
+              title: "Submission Failed", 
+              description: `The last submission of (${siteName}) failed: ${progress.detail}`, 
+              variant: "destructive",
+              duration: 5000,
+            });
           }
         }
       } catch { }
@@ -142,7 +151,7 @@ export default function AgentDashboard() {
       setActiveProxyLocation(data.proxyLocation);
       // We don't reset updates here anymore as they might have already started
       setCurrentProgress(null);
-      connectSSE(data.id);
+      connectSSE(data.id, expandedSite?.name || "Site");
 
       const locationMsg = data.proxyLocation ? ` via ${data.proxyLocation}` : "";
       toast({ title: `Submission started${locationMsg}` });
