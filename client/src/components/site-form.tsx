@@ -203,7 +203,7 @@ export function SiteForm({ site, formData, setFormData, isReadOnly = false }: Si
                 <div className="space-y-2" data-testid="proxy-preview-section">
                     <div className="flex items-center gap-2">
                         <Shield className="w-3 h-3 text-primary" />
-                        <p className="text-[9px] font-bold uppercase tracking-widest text-primary">Proxy Routing Priority</p>
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-primary">Routing</p>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">
