@@ -161,6 +161,47 @@ export async function getWorkingProxy(
 }
 
 /**
+ * Builds an ordered list of all available proxy configs (ZIP → State → County → Country)
+ * WITHOUT testing any of them. Used to pass the full waterfall to browser.ts so it can
+ * retry each tier in sequence if tunnel connections fail during actual page navigation.
+ */
+export function buildProxyWaterfall(
+    zip: string | null,
+    state: string | null,
+    county: string | null,
+    country: string | null,
+    baseConfig: { host: string; port: number; password: string; type: string },
+    zipTemplate: string | null,
+    stateTemplate: string | null = null,
+    countyTemplate: string | null = null,
+    countryTemplate: string | null = null
+): import("./browser").ProxyConfig[] {
+    const { host, port, password, type } = baseConfig;
+    const sessionId = crypto.randomBytes(4).toString("hex");
+    const waterfall: import("./browser").ProxyConfig[] = [];
+
+    if (zip && zipTemplate) {
+        const username = buildGeoUsername(zipTemplate, "zip", zip, sessionId);
+        waterfall.push({ host, port, username, password, protocol: type, label: `zip-${zip}` });
+    }
+    if (state && stateTemplate) {
+        const username = buildGeoUsername(stateTemplate, "state", state, sessionId);
+        waterfall.push({ host, port, username, password, protocol: type, label: `state-${state}` });
+    }
+    if (county && countyTemplate) {
+        const username = buildGeoUsername(countyTemplate, "county", county, sessionId);
+        waterfall.push({ host, port, username, password, protocol: type, label: `county-${county}` });
+    }
+    if (country && countryTemplate) {
+        const username = buildGeoUsername(countryTemplate, "country", country, sessionId);
+        waterfall.push({ host, port, username, password, protocol: type, label: `country-${country}` });
+    }
+
+    return waterfall;
+}
+
+
+/**
  * Check the cache first; if not cached (or expired), run a live proxy test and cache the result.
  */
 async function getCachedOrTest(

@@ -10,7 +10,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import axios from "axios";
 import { autoFillForm, extractTrustedFormData, type AutoFillProgress, type ProxyConfig as BrowserProxyConfig } from "./browser";
-import { getWorkingProxy } from "./proxy-tester";
+import { getWorkingProxy, buildProxyWaterfall } from "./proxy-tester";
 
 const sseClients = new Map<string, import("express").Response[]>();
 const abortControllers = new Map<string, AbortController>();
@@ -813,20 +813,45 @@ export async function registerRoutes(
                 countryUsernameTemplate
               );
             } catch (proxyError: any) {
-              console.error(`[submission] [${siteId}] Proxy resolution failed:`, proxyError.message);
-              return res.status(400).json({ message: proxyError.message });
+              console.warn(`[submission] [${siteId}] Proxy waterfall pre-check failed:`, proxyError.message);
+              // Fallback: Continue without proxy (direct connection) instead of failing
+              workingResult = {
+                primary: null,
+                fallback: null,
+                method: "none" as const
+              };
             }
 
             browserProxy = workingResult.primary;
             const fallbackProxy = workingResult.fallback;
             proxyMethod = workingResult.method;
-            proxyHost = browserProxy.host;
-            proxyPort = browserProxy.port;
-            proxyLocation = browserProxy.label || null;
+            proxyHost = browserProxy?.host || null;
+            proxyPort = browserProxy?.port || null;
+            proxyLocation = browserProxy?.label || null;
 
-            console.log(`[submission] Proxy resolved — method: ${proxyMethod}, primary: ${browserProxy.username}, fallback: ${fallbackProxy?.username || "none"}, location: ${proxyLocation}`);
+
+            console.log(`[submission] Proxy resolved — method: ${proxyMethod}, primary: ${browserProxy?.username || "none (direct)"}, fallback: ${fallbackProxy?.username || "none"}, location: ${proxyLocation}`);
 
             const fields = (site.fields || []) as FormField[];
+
+            // Build the full waterfall for browser.ts to use on tunnel failures
+            const fullWaterfall = buildProxyWaterfall(
+              zipValue,
+              stateCode,
+              countyValue,
+              countryValue,
+              {
+                host: normalizeProxyHost(parentUser.proxyHost),
+                port: parentUser.proxyPort,
+                password: parentUser.proxyPassword,
+                type: parentUser.proxyType || "http"
+              },
+              zipUsernameTemplate,
+              stateUsernameTemplate,
+              countyUsernameTemplate,
+              countryUsernameTemplate
+            );
+
             const submission = await storage.createSubmission({
               agentId: req.user!.userId,
               siteId,
@@ -838,7 +863,7 @@ export async function registerRoutes(
               status: "running",
             });
 
-            console.log(`[submission] [${submission.id}] Initiating auto-fill for ${site.url} via proxy...`);
+            console.log(`[submission] [${submission.id}] Initiating auto-fill for ${site.url} via proxy waterfall (${fullWaterfall.length} tiers)...`);
             const controller = new AbortController();
             abortControllers.set(submission.id, controller);
 
@@ -871,7 +896,8 @@ export async function registerRoutes(
                 sendSSE(submission.id, progress);
               },
               fallbackProxy,
-              controller.signal
+              controller.signal,
+              fullWaterfall  // ← full ZIP→State→County→Country waterfall
             ).then(async (result) => {
               console.log(`[submission] [${submission.id}] Complete — success: ${result.success}`);
               await storage.updateSubmission(submission.id, {
