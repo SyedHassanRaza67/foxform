@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
@@ -17,7 +17,8 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
-  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity, Pencil
+  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity, Pencil,
+  Clock, Filter
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
 import { SiteForm } from "@/components/site-form";
@@ -1472,10 +1473,12 @@ export function ProxyTab() {
 
 export function SubmissionsTab() {
   const { user, isLoading: authLoading } = useAuth();
+  const [timeFilter, setTimeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [siteFilter, setSiteFilter] = useState("all");
 
   const isAgent = user?.role === "agent";
   const isUser = user?.role === "user";
-  const isAdmin = user?.role === "admin";
 
   const submissionsEndpoint = isAgent ? "/api/agent/submissions" : "/api/submissions";
   const sitesEndpoint = isAgent ? "/api/agent/sites" : "/api/sites";
@@ -1498,104 +1501,267 @@ export function SubmissionsTab() {
     enabled: !!user && !authLoading && (isAgent || isUser)
   });
 
-  const data = submissionsQuery.data || [];
-  const total = data.length;
-  const successes = data.filter(s => s.status === "success").length;
-  const failures = data.filter(s => s.status === "failed").length;
+  const rawData = submissionsQuery.data || [];
+  const sites = sitesQuery.data || [];
+
+  const filteredData = useMemo(() => {
+    let result = [...rawData];
+    
+    if (statusFilter !== "all") {
+      result = result.filter(s => s.status === statusFilter);
+    }
+    
+    if (siteFilter !== "all") {
+      result = result.filter(s => s.siteId === siteFilter);
+    }
+    
+    if (timeFilter !== "all") {
+      const now = new Date();
+      let threshold = new Date();
+      if (timeFilter === "12h") threshold.setHours(now.getHours() - 12);
+      else if (timeFilter === "24h") threshold.setHours(now.getHours() - 24);
+      else if (timeFilter === "7d") threshold.setDate(now.getDate() - 7);
+      else if (timeFilter === "30d") threshold.setDate(now.getDate() - 30);
+      
+      result = result.filter(s => new Date(s.createdAt) >= threshold);
+    }
+    
+    return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [rawData, timeFilter, statusFilter, siteFilter]);
+
+  const [selectedSiteFailures, setSelectedSiteFailures] = useState<string | null>(null);
+
+  function getSiteName(id: string) {
+    return sites.find(s => s.id === id)?.name || "Unknown Site";
+  }
+
+  const siteStats = useMemo(() => {
+    const stats: Record<string, { siteId: string, success: number, failed: number, failureList: any[] }> = {};
+    filteredData.forEach(sub => {
+      if (!stats[sub.siteId]) {
+        stats[sub.siteId] = { siteId: sub.siteId, success: 0, failed: 0, failureList: [] };
+      }
+      if (sub.status === "success") {
+        stats[sub.siteId].success++;
+      } else {
+        stats[sub.siteId].failed++;
+        stats[sub.siteId].failureList.push(sub);
+      }
+    });
+    return Object.values(stats).sort((a, b) => getSiteName(a.siteId).localeCompare(getSiteName(b.siteId)));
+  }, [filteredData, sites]);
+
+  const total = filteredData.length;
+  const successes = filteredData.filter(s => s.status === "success").length;
+  const failures = filteredData.filter(s => s.status === "failed").length;
   const successRate = total > 0 ? Math.round((successes / total) * 100) : 0;
-
-  // Group by day
-  const dailyStats = data.reduce((acc: Record<string, any>, sub) => {
-    const day = new Date(sub.createdAt).toLocaleDateString();
-    if (!acc[day]) acc[day] = { day, total: 0, success: 0, failed: 0 };
-    acc[day].total++;
-    if (sub.status === "success") acc[day].success++;
-    else if (sub.status === "failed") acc[day].failed++;
-    return acc;
-  }, {});
-
-  const sortedDays = Object.values(dailyStats).sort((a: any, b: any) =>
-    new Date(b.day).getTime() - new Date(a.day).getTime()
-  );
 
   return (
     <div className="space-y-6">
+      {/* Filters Bar */}
+      <Card className="bg-muted/30 border-dashed">
+        <CardContent className="p-4">
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="space-y-1.5 flex-1 min-w-[140px]">
+              <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Clock className="w-3 h-3" /> Timeframe
+              </Label>
+              <Select value={timeFilter} onValueChange={setTimeFilter}>
+                <SelectTrigger className="h-9 text-xs">
+                  <SelectValue placeholder="All Time" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Time</SelectItem>
+                  <SelectItem value="12h">Last 12 Hours</SelectItem>
+                  <SelectItem value="24h">Last 24 Hours</SelectItem>
+                  <SelectItem value="7d">Last 7 Days</SelectItem>
+                  <SelectItem value="30d">Last 30 Days</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5 flex-1 min-w-[140px]">
+              <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <CheckCircle2 className="w-3 h-3" /> Status
+              </Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="h-9 text-xs">
+                  <SelectValue placeholder="All Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="success">Success</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5 flex-1 min-w-[180px]">
+              <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Globe className="w-3 h-3" /> Filter by Site
+              </Label>
+              <Select value={siteFilter} onValueChange={setSiteFilter}>
+                <SelectTrigger className="h-9 text-xs">
+                  <SelectValue placeholder="All Sites" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Sites</SelectItem>
+                  {sites.map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="h-9 px-3 text-xs"
+              onClick={() => {
+                setTimeFilter("all");
+                setStatusFilter("all");
+                setSiteFilter("all");
+              }}
+            >
+              Reset
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card>
+        <Card className="relative overflow-hidden group">
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Total Submissions</p>
-                <p className="text-2xl font-bold mt-1">{total}</p>
+                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Total Filtered</p>
+                <p className="text-3xl font-bold mt-1 tracking-tight">{total}</p>
               </div>
-              <Activity className="w-8 h-8 text-primary opacity-20" />
+              <Activity className="w-10 h-10 text-primary opacity-10 group-hover:opacity-20 transition-opacity" />
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="relative overflow-hidden group">
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Success Rate</p>
-                <p className="text-2xl font-bold mt-1 text-emerald-500">{successRate}%</p>
+                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Success Rate</p>
+                <p className="text-3xl font-bold mt-1 text-emerald-500 tracking-tight">{successRate}%</p>
               </div>
-              <CheckCircle2 className="w-8 h-8 text-emerald-500 opacity-20" />
+              <CheckCircle2 className="w-10 h-10 text-emerald-500 opacity-10 group-hover:opacity-20 transition-opacity" />
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="relative overflow-hidden group">
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Failed</p>
-                <p className="text-2xl font-bold mt-1 text-destructive">{failures}</p>
+                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Failed</p>
+                <p className="text-3xl font-bold mt-1 text-destructive tracking-tight">{failures}</p>
               </div>
-              <XCircle className="w-8 h-8 text-destructive opacity-20" />
+              <XCircle className="w-10 h-10 text-destructive opacity-10 group-hover:opacity-20 transition-opacity" />
             </div>
           </CardContent>
         </Card>
       </div>
 
+      {/* Detailed Submissions Table */}
       <Card>
+        <CardHeader className="pb-3 border-b border-dashed">
+          <CardTitle className="text-sm font-bold flex items-center gap-2">
+            <FileText className="w-4 h-4 text-primary" />
+            Recent Submissions
+          </CardTitle>
+        </CardHeader>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead className="text-center">Total Submissions</TableHead>
-                <TableHead className="text-center">Success</TableHead>
-                <TableHead className="text-center">Failed</TableHead>
-                <TableHead className="text-right">Success Rate</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {submissionsQuery.isLoading || sitesQuery.isLoading ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></TableCell></TableRow>
-              ) : (submissionsQuery.isError || sitesQuery.isError) ? (
+          <div className="rounded-md overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/30">
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-destructive">
-                    <p className="font-medium">Failed to load data</p>
-                  </TableCell>
+                  <TableHead className="py-3">Target Site</TableHead>
+                  <TableHead className="text-center w-40">Success</TableHead>
+                  <TableHead className="text-center w-40">Failed</TableHead>
                 </TableRow>
-              ) : sortedDays.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No submissions recorded</TableCell></TableRow>
-              ) : (
-                sortedDays.map((day: any) => (
-                  <TableRow key={day.day}>
-                    <TableCell className="font-medium">{day.day}</TableCell>
-                    <TableCell className="text-center font-mono">{day.total}</TableCell>
-                    <TableCell className="text-center text-emerald-500 font-mono">{day.success}</TableCell>
-                    <TableCell className="text-center text-destructive font-mono">{day.failed}</TableCell>
-                    <TableCell className="text-right font-mono font-bold">
-                      {Math.round((day.success / day.total) * 100)}%
+              </TableHeader>
+              <TableBody>
+                {submissionsQuery.isLoading || sitesQuery.isLoading ? (
+                  <TableRow><TableCell colSpan={5} className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary/40" /></TableCell></TableRow>
+                ) : siteStats.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                      <div className="flex flex-col items-center gap-2">
+                        <Filter className="w-8 h-8 opacity-20" />
+                        <p className="font-medium">No submissions found matching filters</p>
+                        <Button variant="link" size="sm" onClick={() => { setTimeFilter("all"); setStatusFilter("all"); setSiteFilter("all"); }}>Clear all filters</Button>
+                      </div>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                ) : (
+                  siteStats.map((stat) => (
+                    <TableRow key={stat.siteId} className="group hover:bg-muted/30 transition-colors">
+                      <TableCell className="py-4">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded bg-primary/5 flex items-center justify-center shrink-0">
+                             <Globe className="w-4 h-4 text-primary" />
+                          </div>
+                          <span className="truncate font-bold text-sm">{getSiteName(stat.siteId)}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex flex-col items-center">
+                          <span className="text-lg font-mono font-bold text-emerald-500">{stat.success}</span>
+                          <span className="text-[9px] uppercase tracking-tighter text-muted-foreground">Passed</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <button 
+                          onClick={() => stat.failed > 0 && setSelectedSiteFailures(stat.siteId)}
+                          className={`flex flex-col items-center hover:bg-destructive/5 rounded p-1 transition-colors w-full ${stat.failed > 0 ? 'cursor-pointer group/fail' : 'cursor-default'}`}
+                        >
+                          <span className={`text-lg font-mono font-bold ${stat.failed > 0 ? 'text-destructive' : 'text-muted-foreground/30'}`}>{stat.failed}</span>
+                          <span className={`text-[9px] uppercase tracking-tighter text-muted-foreground ${stat.failed > 0 ? 'group-hover/fail:underline' : ''}`}>
+                            {stat.failed === 1 ? 'Failure' : 'Failures'}
+                          </span>
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
+
+      <Dialog open={!!selectedSiteFailures} onOpenChange={(open) => !open && setSelectedSiteFailures(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <XCircle className="w-5 h-5 text-destructive" />
+              Failure Details: {getSiteName(selectedSiteFailures || "")}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-4 max-h-[60vh] overflow-y-auto pr-2">
+            <div className="space-y-3">
+              {siteStats.find(s => s.siteId === selectedSiteFailures)?.failureList.map((f, i) => (
+                <div key={i} className="p-3 rounded-lg border border-destructive/20 bg-destructive/5 space-y-2 animate-in fade-in slide-in-from-top-2 duration-300" style={{ animationDelay: `${i * 50}ms` }}>
+                  <div className="flex items-center justify-between text-[10px] uppercase tracking-wider font-bold text-muted-foreground">
+                    <span>{new Date(f.createdAt).toLocaleString()}</span>
+                    <Badge variant="outline" className="h-4 text-[9px] font-mono">{f.proxyMethod || "direct"}</Badge>
+                  </div>
+                  <p className="text-sm font-medium text-destructive leading-relaxed">
+                    {f.error || "Submission failed without a specific error message."}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" onClick={() => setSelectedSiteFailures(null)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
