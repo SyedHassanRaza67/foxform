@@ -1028,144 +1028,137 @@ export async function autoFillForm(
     // Track how many click attempts actually fired a click
     let totalClicksFired = 0;
 
+    // --- All submit helpers defined OUTSIDE the retry loop ---
+    // This prevents esbuild TDZ minification crashes ('Cannot access x before initialization')
+
+    const isElVisible = async (node: any): Promise<boolean> => {
+      return page.evaluate((el: Element) => {
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0
+          && s.display !== 'none'
+          && s.visibility !== 'hidden'
+          && parseFloat(s.opacity) > 0.1
+          && !(el as HTMLButtonElement).disabled;
+      }, node).catch(() => true);
+    };
+
+    const standardSelectors = [
+      submitSelector,
+      'button[type="submit"]',
+      'input[type="submit"]',
+    ].filter(Boolean) as string[];
+
+    // clickFired declared outside; reset to false at the top of each attempt
+    let clickFired = false;
+
+    // attemptTrustedClick — defined OUTSIDE the loop to avoid esbuild TDZ crashes
+    const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
+      try {
+        await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
+        await sleep(randomDelay(350, 650));
+        let box = await elHandle.boundingBox();
+        if (!box || box.width === 0 || box.height === 0) {
+          throw new Error('Button has no visible bounding box');
+        }
+        let clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
+        let clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
+        let isClickable = await page.evaluate((x: number, y: number, node: Element) => {
+          const elAtPoint = document.elementFromPoint(x, y);
+          return elAtPoint === node || node.contains(elAtPoint) ||
+            (elAtPoint && elAtPoint.closest && elAtPoint.closest('button, input[type="submit"]') === node);
+        }, clickX, clickY, elHandle).catch(() => true);
+        if (!isClickable) {
+          console.warn(`[browser] Submit button obscured — scrolling to clear.`);
+          await page.evaluate(() => window.scrollBy(0, -180));
+          await sleep(400);
+          const nb = await elHandle.boundingBox();
+          if (nb) { box = nb; clickX = box.x + box.width * (0.25 + Math.random() * 0.50); clickY = box.y + box.height * (0.25 + Math.random() * 0.50); }
+        }
+        const offX = randomDelay(-150, 150) * (Math.random() > 0.5 ? 1 : -1);
+        const offY = randomDelay(-80, 80)   * (Math.random() > 0.5 ? 1 : -1);
+        const startX = clickX + offX; const startY = clickY + offY;
+        await page.mouse.move(startX, startY, { steps: randomDelay(3, 5) });
+        await sleep(randomDelay(30, 70));
+        const arc1X = startX + (clickX - startX) * 0.33 + randomDelay(-25, 25);
+        const arc1Y = startY + (clickY - startY) * 0.33 + randomDelay(-15, 15);
+        await page.mouse.move(arc1X, arc1Y, { steps: randomDelay(4, 6) });
+        await sleep(randomDelay(15, 35));
+        const arc2X = startX + (clickX - startX) * 0.70 + randomDelay(-15, 15);
+        const arc2Y = startY + (clickY - startY) * 0.70 + randomDelay(-10, 10);
+        await page.mouse.move(arc2X, arc2Y, { steps: randomDelay(4, 7) });
+        await sleep(randomDelay(15, 30));
+        await page.mouse.move(clickX, clickY, { steps: randomDelay(3, 5) });
+        await sleep(randomDelay(180, 380));
+        await page.mouse.down();
+        await sleep(randomDelay(80, 160));
+        await page.mouse.up();
+        await sleep(randomDelay(60, 120));
+        console.log(`[browser] ✓ Human click fired (${context}) → (${Math.round(clickX)}, ${Math.round(clickY)})`);
+        return true;
+      } catch (mouseErr: any) {
+        console.warn(`[browser] Human mouse trajectory failed (${context}): ${mouseErr?.message} — falling back to elHandle.click()`);
+      }
+      try {
+        await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
+        await sleep(randomDelay(300, 500));
+        await elHandle.click({ delay: randomDelay(90, 160) });
+        console.log(`[browser] ✓ Clicked via elHandle.click() (${context})`);
+        return true;
+      } catch (fallbackErr: any) {
+        console.warn(`[browser] elHandle.click() also failed (${context}): ${fallbackErr?.message}`);
+      }
+      // Synthetic pointer-event chain — last resort before nuclear fallback
+      const synOk = await page.evaluate((node: Element) => {
+        const el = node as HTMLElement;
+        const rect = el.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2; const cy = rect.top + rect.height / 2;
+        const base = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+        el.dispatchEvent(new PointerEvent('pointerover',  { ...base, pointerId: 1, pointerType: 'mouse' }));
+        el.dispatchEvent(new MouseEvent ('mouseover',    base));
+        el.dispatchEvent(new PointerEvent('pointerdown',  { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+        el.dispatchEvent(new MouseEvent ('mousedown',    { ...base, button: 0, buttons: 1 }));
+        el.dispatchEvent(new PointerEvent('pointerup',    { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+        el.dispatchEvent(new MouseEvent ('mouseup',      { ...base, button: 0, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent ('click',        { ...base, button: 0, buttons: 0 }));
+        return true;
+      }, elHandle).catch(() => false);
+      if (synOk) { console.log(`[browser] ✓ Clicked via synthetic pointer-event chain (${context})`); return true; }
+      return false;
+    };
+
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (submissionConfirmed) break;
-
-      // Check if we've already exceeded the 45s total submission window
       if (Date.now() - submissionStartTime > SUBMISSION_PHASE_MAX_MS) {
         console.warn(`[browser] Submission phase timed out after ${SUBMISSION_PHASE_MAX_MS / 1000}s (Attempt ${attempt})`);
         break;
       }
-
       try {
+        clickFired = false; // Reset for each attempt
         onProgress({ step: "submitting", detail: `Submit attempt ${attempt}`, percent: 85 + attempt, timestamp: Date.now() });
+        await hideOverlays(page);
 
-        await hideOverlays(page); // Clear blockers
-
-        const standardSelectors = [
-          submitSelector,
-          'button[type="submit"]',
-          'input[type="submit"]',
-        ].filter(Boolean) as string[];
-
-        let clickFired = false;
-
-        const attemptTrustedClick = async (elHandle: any, context: string): Promise<boolean> => {
-          try {
-            // Step 1: Scroll submit button into view instantly (smooth scroll causes moving targets)
-            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(350, 650)); // Let the page fully settle after scroll
-
-            // Step 2: Get the exact bounding box of the button
-            let box = await elHandle.boundingBox();
-            if (!box || box.width === 0 || box.height === 0) {
-              throw new Error('Button has no visible bounding box');
-            }
-
-            // Step 3: Pick a randomised landing point within the inner 50% of the button
-            // (humans never click dead center — slightly off-center is more realistic)
-            let clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
-            let clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
-
-            // Step 4: Verify the element is actually clickable (not covered by overlay/header)
-            let isClickable = await page.evaluate((x: number, y: number, node: Element) => {
-              const elAtPoint = document.elementFromPoint(x, y);
-              return elAtPoint === node || node.contains(elAtPoint) ||
-                (elAtPoint && elAtPoint.closest && elAtPoint.closest('button, input[type="submit"]') === node);
-            }, clickX, clickY, elHandle).catch(() => true);
-
-            if (!isClickable) {
-              console.warn(`[browser] Submit button obscured at (${Math.round(clickX)},${Math.round(clickY)}) — scrolling to clear.`);
-              await page.evaluate(() => window.scrollBy(0, -180));
-              await sleep(400);
-              const newBox = await elHandle.boundingBox();
-              if (newBox) {
-                box = newBox;
-                clickX = box.x + box.width  * (0.25 + Math.random() * 0.50);
-                clickY = box.y + box.height * (0.25 + Math.random() * 0.50);
-              }
-            }
-
-            // Step 5: Full 5-point human mouse arc
-            //   Start (off-screen random) → Point1 → Midpoint (slight curve) → Point2 → Target
-            //   This mimics a real human cursor path and passes isTrusted pointer checks.
-            const offX = randomDelay(-150, 150) * (Math.random() > 0.5 ? 1 : -1);
-            const offY = randomDelay(-80, 80)   * (Math.random() > 0.5 ? 1 : -1);
-            const startX = clickX + offX;
-            const startY = clickY + offY;
-
-            // Move to approach point first (cursor arrives from elsewhere on the page)
-            await page.mouse.move(startX, startY, { steps: randomDelay(3, 5) });
-            await sleep(randomDelay(30, 70));
-
-            // Arc point 1 — slight deviation from straight line
-            const arc1X = startX + (clickX - startX) * 0.33 + randomDelay(-25, 25);
-            const arc1Y = startY + (clickY - startY) * 0.33 + randomDelay(-15, 15);
-            await page.mouse.move(arc1X, arc1Y, { steps: randomDelay(4, 6) });
-            await sleep(randomDelay(15, 35));
-
-            // Arc point 2 — deceleration near the target
-            const arc2X = startX + (clickX - startX) * 0.70 + randomDelay(-15, 15);
-            const arc2Y = startY + (clickY - startY) * 0.70 + randomDelay(-10, 10);
-            await page.mouse.move(arc2X, arc2Y, { steps: randomDelay(4, 7) });
-            await sleep(randomDelay(15, 30));
-
-            // Final approach — land precisely on the button
-            await page.mouse.move(clickX, clickY, { steps: randomDelay(3, 5) });
-
-            // Step 6: Hover pause — human briefly notices the button before pressing
-            await sleep(randomDelay(180, 380));
-
-            // Step 7: Physical mousedown → hold → mouseup (generates isTrusted=true events)
-            await page.mouse.down();
-            await sleep(randomDelay(80, 160)); // realistic button press duration
-            await page.mouse.up();
-            await sleep(randomDelay(60, 120)); // brief post-click pause before page reacts
-
-            console.log(`[browser] ✓ Human click fired (${context}) → (${Math.round(clickX)}, ${Math.round(clickY)})`);
-            return true;
-          } catch (mouseErr: any) {
-            console.warn(`[browser] Human mouse trajectory failed (${context}): ${mouseErr?.message} — falling back to elHandle.click()`);
+        // --- Step 0: Prioritize custom onclick submit buttons (CF7 + Google Sheets) ---
+        if (!clickFired) {
+          const customBtnHandle = await page.evaluateHandle(() => {
+            const vis = (el: Element) => {
+              const r = el.getBoundingClientRect();
+              const s = window.getComputedStyle(el);
+              return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0.1 && !(el as HTMLButtonElement).disabled;
+            };
+            const cands = Array.from(document.querySelectorAll(
+              '#ph-submit-btn, [id*="ph-submit"], button[onclick*="SendSheet"], button[onclick*="sendSheet"], button[onclick*="phSend"]'
+            )) as HTMLElement[];
+            return cands.find(vis) || null;
+          });
+          const customEl = customBtnHandle.asElement();
+          if (customEl) {
+            console.log('[browser] Step 0: found #ph-submit-btn / phSendSheet button');
+            clickFired = await attemptTrustedClick(customEl, 'Step 0: #ph-submit-btn');
           }
+        }
 
-          // Fallback 1: Puppeteer built-in click — scrolls into view, still isTrusted on most pages
-          try {
-            await elHandle.evaluate((node: Element) => node.scrollIntoView({ behavior: 'auto', block: 'center' }));
-            await sleep(randomDelay(300, 500));
-            await elHandle.click({ delay: randomDelay(90, 160) });
-            console.log(`[browser] ✓ Clicked via elHandle.click() (${context})`);
-            return true;
-          } catch (fallbackErr: any) {
-            console.warn(`[browser] elHandle.click() also failed (${context}): ${fallbackErr?.message}`);
-          }
-
-          // Fallback 2: Synthetic pointer-event chain — fires a SINGLE click event only.
-          // IMPORTANT: do NOT call el.click() here in addition to dispatchEvent — that would
-          // submit the form twice and cause duplicate backend entries.
-          const ok = await page.evaluate((node: Element) => {
-            const el = node as HTMLElement;
-            const rect = el.getBoundingClientRect();
-            const cx = rect.left + rect.width  / 2;
-            const cy = rect.top  + rect.height / 2;
-            const base = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
-            el.dispatchEvent(new PointerEvent('pointerover',  { ...base, pointerId: 1, pointerType: 'mouse' }));
-            el.dispatchEvent(new MouseEvent ('mouseover',    base));
-            el.dispatchEvent(new PointerEvent('pointermove',  { ...base, pointerId: 1, pointerType: 'mouse' }));
-            el.dispatchEvent(new MouseEvent ('mousemove',    base));
-            el.dispatchEvent(new PointerEvent('pointerdown',  { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-            el.dispatchEvent(new MouseEvent ('mousedown',    { ...base, button: 0, buttons: 1 }));
-            el.dispatchEvent(new PointerEvent('pointerup',    { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-            el.dispatchEvent(new MouseEvent ('mouseup',      { ...base, button: 0, buttons: 0 }));
-            el.dispatchEvent(new MouseEvent ('click',        { ...base, button: 0, buttons: 0 })); // ONE click only
-            return true;
-          }, elHandle).catch(() => false);
-
-          if (ok) {
-            console.log(`[browser] ✓ Clicked via synthetic pointer-event chain (${context})`);
-            return true;
-          }
-          return false;
-        };
+        // Step 0 ends — Steps 1-4 follow
 
         // --- Step 1: Try standard CSS selectors (instant page.$, no timeout waste) ---
         for (const sel of standardSelectors) {
@@ -1184,30 +1177,50 @@ export async function autoFillForm(
           } catch { }
         }
 
-        // --- Step 2: JS text-based broad search (if CSS selectors didn't work) ---
+        // --- Step 2: JS text-based broad search — onclick handlers prioritized over type=submit ---
+        // Root cause fix: sites use type="button" with onclick (e.g. phSendSheet) as the REAL
+        // submit trigger. Preferring type="submit" would click a different, hidden CF7 button.
         if (!clickFired) {
           const submitTexts = [
             "submit", "send", "get quote", "get started", "continue",
             "next", "apply", "free", "start", "go", "request", "confirm", "done"
           ];
           const elHandle = await page.evaluateHandle((texts: string[]) => {
-            const candidates = Array.from(document.querySelectorAll(
-              'button, input[type="button"], input[type="submit"], a[role="button"], [role="button"]'
-            )) as HTMLElement[];
-            // Prefer visible, non-disabled candidates
-            const visible = candidates.filter(el => {
+            const isVisible = (el: Element) => {
               const r = el.getBoundingClientRect();
-              return r.width > 0 && r.height > 0 && !(el as HTMLButtonElement).disabled;
+              const s = window.getComputedStyle(el);
+              return r.width > 0 && r.height > 0
+                && s.display !== 'none'
+                && s.visibility !== 'hidden'
+                && parseFloat(s.opacity) > 0.1
+                && !(el as HTMLButtonElement).disabled;
+            };
+
+            // Priority 1: type="button" WITH an onclick attribute (custom sheet/handler buttons)
+            const onclickBtns = Array.from(document.querySelectorAll(
+              'button[onclick]:not([type="submit"]), input[type="button"][onclick]'
+            )) as HTMLElement[];
+            const visibleOnclick = onclickBtns.filter(isVisible);
+            const onclickMatch = visibleOnclick.find(el => {
+              const text = (el.textContent || (el as HTMLInputElement).value || '').toLowerCase().trim();
+              return texts.some(st => text.includes(st));
             });
+            if (onclickMatch) return onclickMatch;
+
+            // Priority 2: standard submit/button candidates (type=submit, button, role=button)
+            const candidates = Array.from(document.querySelectorAll(
+              'button[type="submit"], input[type="submit"], button:not([type]), input[type="button"], a[role="button"], [role="button"]'
+            )) as HTMLElement[];
+            const visible = candidates.filter(isVisible);
             return visible.find(el => {
-              const text = (el.textContent || (el as HTMLInputElement).value || "").toLowerCase().trim();
+              const text = (el.textContent || (el as HTMLInputElement).value || '').toLowerCase().trim();
               return texts.some(st => text.includes(st));
             }) || null;
           }, submitTexts);
 
           const el = elHandle.asElement();
           if (el) {
-            clickFired = await attemptTrustedClick(el, "JS text search");
+            clickFired = await attemptTrustedClick(el, 'JS text search (onclick priority)');
           }
         }
 
@@ -1286,7 +1299,7 @@ export async function autoFillForm(
         // Brief network-idle grace period (lets AJAX fire before we start polling)
         try { await page.waitForNetworkIdle({ timeout: 3000 }); } catch { /* fine */ }
 
-        const confirmationWindow = 20000; // 20s max per attempt
+        const confirmationWindow = 3000; // 3s max — reduced per user request to skip long confirmation wait
         const confirmDeadline = Date.now() + confirmationWindow;
 
         // Capture body snapshot immediately after click for change detection
@@ -1407,7 +1420,7 @@ export async function autoFillForm(
     // This handles slow AJAX responses, SPA transitions, and forms with no visible feedback.
     if (!submissionConfirmed && totalClicksFired >= 1 && !lastErrorDetail) {
       onProgress({ step: "submitting", detail: "Waiting for final server response...", percent: 96, timestamp: Date.now() });
-      await sleep(6000); // Extra 6s — gives slow AJAX / CDN-cached responses time to settle
+      await sleep(1000); // 1s extra — reduced per user request to skip long wait
 
       const finalUrl = page.url();
       const finalBody = await page.evaluate(() => document.body?.innerText?.toLowerCase().slice(0, 2500) || "").catch(() => "");
@@ -1484,6 +1497,11 @@ export async function autoFillForm(
     }
 
     return { success: false, screenshot: null, duration, errorMessage: error.message, extractedData: currentExtractedData || {} };
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch { }
+      browser = null;
+    }
   }
 }
 
@@ -1628,5 +1646,10 @@ export async function extractTrustedFormData(
       try { await browser.close(); } catch { }
     }
     return {};
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch { }
+      browser = null;
+    }
   }
 }

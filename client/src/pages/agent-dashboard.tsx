@@ -86,10 +86,10 @@ export default function AgentDashboard() {
 
           if (progress.step === "complete") {
             setLastSuccessSiteId(submissionId); 
-            setExpandedSiteId(null); 
+            // Don't setExpandedSiteId(null) immediately, let the success UI show site context
             toast({ 
               title: "Submission Complete", 
-              description: `The last submission of (${siteName}) success`,
+              description: `Successfully submitted to ${siteName}`,
               duration: 5000,
             });
           } else {
@@ -310,6 +310,7 @@ export default function AgentDashboard() {
       setActiveProxyLocation(null);
       setProgressUpdates([]);
       setCurrentProgress(null);
+      setExpandedSiteId(null); // Close the underlying form now
     }
   };
 
@@ -484,58 +485,89 @@ export default function AgentDashboard() {
               )}
             </DialogTitle>
           </DialogHeader>
-
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span data-testid="text-progress-detail">
-                  {submitMutation.isPending
-                    ? "Creating submission..."
-                    : currentProgress?.detail || "Starting browser..."}
-                </span>
-                <span className="font-mono font-semibold tabular-nums" data-testid="text-progress-percent">
-                  {progressPercent}%
-                </span>
-              </div>
-              <Progress value={progressPercent} className="h-2.5" data-testid="progress-autofill" />
-            </div>
-
-            {progressUpdates.length > 0 && (
-              <div
-                ref={progressContainerRef}
-                className="max-h-56 overflow-y-auto rounded-md bg-muted p-3 space-y-1 text-[11px] font-mono"
-              >
-                {progressUpdates.map((p, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <span className="text-muted-foreground shrink-0 w-10 tabular-nums">
-                      {Math.round((p.timestamp - progressUpdates[0].timestamp) / 1000)}s
-                    </span>
-                    <span className={
-                      p.step === "error"
-                        ? "text-destructive"
-                        : p.step === "queued" || p.step === "field_warning" || p.step === "submit_warning"
-                          ? "text-amber-500"
-                          : p.step === "complete"
-                            ? "text-emerald-500"
-                            : "text-foreground"
-                    }>
-                      {p.step === "queued" ? "⏳ " : p.step === "field_warning" ? "⚠ " : ""}{p.detail}
+            {currentProgress?.step === "complete" ? (
+              <div className="flex flex-col items-center justify-center py-6 text-center space-y-4 animate-in fade-in zoom-in duration-500">
+                <div className="w-20 h-20 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-500 animate-bounce" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">Submission Successful!</h2>
+                  <p className="text-sm text-muted-foreground mt-1 px-4">
+                    Your form data has been successfully submitted and confirmed on <strong>{expandedSite?.name}</strong>.
+                  </p>
+                </div>
+                <div className="w-full bg-emerald-50/50 dark:bg-emerald-500/5 rounded-lg p-4 text-left border border-emerald-500/20">
+                  <div className="flex justify-between text-xs mb-2">
+                    <span className="text-muted-foreground">Site</span>
+                    <span className="font-semibold">{expandedSite?.name}</span>
+                  </div>
+                  <div className="flex justify-between text-xs mb-2">
+                    <span className="text-muted-foreground">Status</span>
+                    <span className="font-semibold text-emerald-600 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Confirmed
                     </span>
                   </div>
-                ))}
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Submission ID</span>
+                    <span className="font-mono text-[10px] opacity-70">{activeSubmissionId?.slice(0, 13)}...</span>
+                  </div>
+                </div>
               </div>
-            )}
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span data-testid="text-progress-detail">
+                      {submitMutation.isPending
+                        ? "Creating submission..."
+                        : currentProgress?.detail || "Starting browser..."}
+                    </span>
+                    <span className="font-mono font-semibold tabular-nums" data-testid="text-progress-percent">
+                      {progressPercent}%
+                    </span>
+                  </div>
+                  <Progress value={progressPercent} className="h-2.5" data-testid="progress-autofill" />
+                </div>
 
-            {isBusy && progressUpdates.length === 0 && (
-              <div className="flex items-center justify-center gap-3 py-4 text-muted-foreground text-sm">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Launching browser & navigating to page...</span>
+                {progressUpdates.length > 0 && (
+                  <div
+                    ref={progressContainerRef}
+                    className="max-h-56 overflow-y-auto rounded-md bg-muted p-3 space-y-1 text-[11px] font-mono"
+                  >
+                    {progressUpdates.map((p, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="text-muted-foreground shrink-0 w-10 tabular-nums">
+                          {Math.round((p.timestamp - progressUpdates[0].timestamp) / 1000)}s
+                        </span>
+                        <span className={
+                          p.step === "error"
+                            ? "text-destructive"
+                            : p.step === "queued" || p.step === "field_warning" || p.step === "submit_warning"
+                              ? "text-amber-500"
+                              : p.step === "complete"
+                                ? "text-emerald-500"
+                                : "text-foreground"
+                        }>
+                          {p.step === "queued" ? "⏳ " : p.step === "field_warning" ? "⚠ " : ""}{p.detail}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isBusy && progressUpdates.length === 0 && (
+                  <div className="flex items-center justify-center gap-3 py-4 text-muted-foreground text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Launching browser & navigating to page...</span>
+                  </div>
+                )}
               </div>
             )}
 
             {isDone && (
               <Button
-                className="w-full"
+                className="w-full shadow-lg"
                 variant={currentProgress?.step === "complete" ? "default" : "destructive"}
                 onClick={handleCloseProgress}
                 data-testid="button-close-progress"
