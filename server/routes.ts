@@ -543,7 +543,11 @@ export async function registerRoutes(
   app.get("/api/submissions", authMiddleware, requireRole("user"), async (req, res) => {
     try {
       const agents = await storage.getAgentsByParent(req.user!.userId);
+      const agentMap = new Map(agents.map(a => [a.id, a.name]));
       const agentIds = agents.map(a => a.id);
+
+      const sites = await storage.getSitesByOwner(req.user!.userId);
+      const siteMap = new Map(sites.map(s => [s.id, s.name]));
 
       const allSubs = [];
       for (const agentId of agentIds) {
@@ -551,7 +555,13 @@ export async function registerRoutes(
         allSubs.push(...subs);
       }
 
-      return res.json(allSubs.sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime()));
+      const subsWithDetails = allSubs.map(sub => ({
+        ...sub,
+        agentName: agentMap.get(sub.agentId) || "Unknown Agent",
+        siteName: siteMap.get(sub.siteId) || "Unknown Site",
+      }));
+
+      return res.json(subsWithDetails.sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime()));
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }

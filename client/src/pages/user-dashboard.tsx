@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
   FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor, Activity, Pencil,
-  Clock, Filter
+  Clock, Filter, Download, ExternalLink
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
 import { SiteForm } from "@/components/site-form";
@@ -1473,9 +1473,12 @@ export function ProxyTab() {
 
 export function SubmissionsTab() {
   const { user, isLoading: authLoading } = useAuth();
+  const [activeView, setActiveView] = useState("summary");
   const [timeFilter, setTimeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [siteFilter, setSiteFilter] = useState("all");
+  const [selectedSubmissionPayload, setSelectedSubmissionPayload] = useState<Record<string, string> | null>(null);
+  const [selectedSubmissionProxy, setSelectedSubmissionProxy] = useState<any | null>(null);
 
   const isAgent = user?.role === "agent";
   const isUser = user?.role === "user";
@@ -1555,6 +1558,87 @@ export function SubmissionsTab() {
   const successes = filteredData.filter(s => s.status === "success").length;
   const failures = filteredData.filter(s => s.status === "failed").length;
   const successRate = total > 0 ? Math.round((successes / total) * 100) : 0;
+
+  const handleExportCSV = () => {
+    if (filteredData.length === 0) return;
+
+    // Collect all unique form data keys to dynamically generate columns
+    const allFormFieldKeysSet = new Set<string>();
+    filteredData.forEach(sub => {
+      if (sub.formData) {
+        Object.keys(sub.formData).forEach(key => allFormFieldKeysSet.add(key));
+      }
+    });
+    const formFieldsHeaders = Array.from(allFormFieldKeysSet).sort();
+
+    // Standard headers
+    const headers = [
+      "Submission ID",
+      "Timestamp",
+      "Agent Name",
+      "Target Site",
+      "Status",
+      "Duration (sec)",
+      "Error Message",
+      "TrustedForm URL",
+      "Journaya URL",
+      "Proxy Host",
+      "Proxy Port",
+      "Proxy Method",
+      "Proxy Location",
+      ...formFieldsHeaders
+    ];
+
+    const escapeCSV = (val: any) => {
+      if (val === null || val === undefined) return "";
+      const str = String(val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const csvRows = [headers.join(",")];
+
+    filteredData.forEach(sub => {
+      const tfUrl = sub.extractedData?.trusted_form_url || "";
+      const journayaUrl = sub.extractedData?.journaya_url || sub.extractedData?.journaya_token || "";
+
+      const rowData = [
+        sub.id,
+        new Date(sub.createdAt).toLocaleString(),
+        isAgent ? user?.name : (sub.agentName || "Unknown Agent"),
+        getSiteName(sub.siteId),
+        sub.status,
+        sub.duration ? (sub.duration / 1000).toFixed(1) : "",
+        sub.errorMessage || "",
+        tfUrl,
+        journayaUrl,
+        sub.proxyHost || "",
+        sub.proxyPort || "",
+        sub.proxyMethod || "",
+        sub.proxyLocation || ""
+      ];
+
+      // Add dynamic form fields
+      formFieldsHeaders.forEach(field => {
+        rowData.push(sub.formData?.[field] || "");
+      });
+
+      csvRows.push(rowData.map(escapeCSV).join(","));
+    });
+
+    const csvContent = csvRows.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `submissions_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
     <div className="space-y-6">
@@ -1666,74 +1750,224 @@ export function SubmissionsTab() {
         </Card>
       </div>
 
-      {/* Detailed Submissions Table */}
-      <Card>
-        <CardHeader className="pb-3 border-b border-dashed">
-          <CardTitle className="text-sm font-bold flex items-center gap-2">
-            <FileText className="w-4 h-4 text-primary" />
-            Recent Submissions
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="rounded-md overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/30">
-                <TableRow>
-                  <TableHead className="py-3">Target Site</TableHead>
-                  <TableHead className="text-center w-40">Success</TableHead>
-                  <TableHead className="text-center w-40">Failed</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {submissionsQuery.isLoading || sitesQuery.isLoading ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary/40" /></TableCell></TableRow>
-                ) : siteStats.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                      <div className="flex flex-col items-center gap-2">
-                        <Filter className="w-8 h-8 opacity-20" />
-                        <p className="font-medium">No submissions found matching filters</p>
-                        <Button variant="link" size="sm" onClick={() => { setTimeFilter("all"); setStatusFilter("all"); setSiteFilter("all"); }}>Clear all filters</Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  siteStats.map((stat) => (
-                    <TableRow key={stat.siteId} className="group hover:bg-muted/30 transition-colors">
-                      <TableCell className="py-4">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-8 h-8 rounded bg-primary/5 flex items-center justify-center shrink-0">
-                             <Globe className="w-4 h-4 text-primary" />
-                          </div>
-                          <span className="truncate font-bold text-sm">{getSiteName(stat.siteId)}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex flex-col items-center">
-                          <span className="text-lg font-mono font-bold text-emerald-500">{stat.success}</span>
-                          <span className="text-[9px] uppercase tracking-tighter text-muted-foreground">Passed</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <button 
-                          onClick={() => stat.failed > 0 && setSelectedSiteFailures(stat.siteId)}
-                          className={`flex flex-col items-center hover:bg-destructive/5 rounded p-1 transition-colors w-full ${stat.failed > 0 ? 'cursor-pointer group/fail' : 'cursor-default'}`}
-                        >
-                          <span className={`text-lg font-mono font-bold ${stat.failed > 0 ? 'text-destructive' : 'text-muted-foreground/30'}`}>{stat.failed}</span>
-                          <span className={`text-[9px] uppercase tracking-tighter text-muted-foreground ${stat.failed > 0 ? 'group-hover/fail:underline' : ''}`}>
-                            {stat.failed === 1 ? 'Failure' : 'Failures'}
-                          </span>
-                        </button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Tab Switcher & Views */}
+      <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
+        <div className="flex items-center justify-between pb-2 flex-wrap gap-2">
+          <TabsList className="bg-muted/80">
+            <TabsTrigger value="summary" className="text-xs">Site Summary</TabsTrigger>
+            {!isAgent && <TabsTrigger value="log" className="text-xs">Submissions Log</TabsTrigger>}
+          </TabsList>
+          
+          {activeView === "log" && !isAgent && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={handleExportCSV}
+              disabled={filteredData.length === 0}
+              className="text-xs h-8 gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export CSV
+            </Button>
+          )}
+        </div>
 
+        <TabsContent value="summary" className="mt-0 space-y-4">
+          <Card>
+            <CardHeader className="pb-3 border-b border-dashed">
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <FileText className="w-4 h-4 text-primary" />
+                Site Submissions Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="rounded-md overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-muted/30">
+                    <TableRow>
+                      <TableHead className="py-3">Target Site</TableHead>
+                      <TableHead className="text-center w-40">Success</TableHead>
+                      <TableHead className="text-center w-40">Failed</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {submissionsQuery.isLoading || sitesQuery.isLoading ? (
+                      <TableRow><TableCell colSpan={3} className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary/40" /></TableCell></TableRow>
+                    ) : siteStats.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-center py-16 text-muted-foreground">
+                          <div className="flex flex-col items-center gap-2">
+                            <Filter className="w-8 h-8 opacity-20" />
+                            <p className="font-medium">No submissions found matching filters</p>
+                            <Button variant="link" size="sm" onClick={() => { setTimeFilter("all"); setStatusFilter("all"); setSiteFilter("all"); }}>Clear all filters</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      siteStats.map((stat) => (
+                        <TableRow key={stat.siteId} className="group hover:bg-muted/30 transition-colors">
+                          <TableCell className="py-4">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-8 h-8 rounded bg-primary/5 flex items-center justify-center shrink-0">
+                                 <Globe className="w-4 h-4 text-primary" />
+                              </div>
+                              <span className="truncate font-bold text-sm">{getSiteName(stat.siteId)}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <div className="flex flex-col items-center">
+                              <span className="text-lg font-mono font-bold text-emerald-500">{stat.success}</span>
+                              <span className="text-[9px] uppercase tracking-tighter text-muted-foreground">Passed</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <button 
+                              onClick={() => stat.failed > 0 && setSelectedSiteFailures(stat.siteId)}
+                              className={`flex flex-col items-center hover:bg-destructive/5 rounded p-1 transition-colors w-full ${stat.failed > 0 ? 'cursor-pointer group/fail' : 'cursor-default'}`}
+                            >
+                              <span className={`text-lg font-mono font-bold ${stat.failed > 0 ? 'text-destructive' : 'text-muted-foreground/30'}`}>{stat.failed}</span>
+                              <span className={`text-[9px] uppercase tracking-tighter text-muted-foreground ${stat.failed > 0 ? 'group-hover/fail:underline' : ''}`}>
+                                {stat.failed === 1 ? 'Failure' : 'Failures'}
+                              </span>
+                            </button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {!isAgent && (
+          <TabsContent value="log" className="mt-0">
+            <Card>
+              <CardContent className="p-0">
+                <div className="rounded-md overflow-x-auto">
+                  <Table>
+                    <TableHeader className="bg-muted/30">
+                      <TableRow>
+                        <TableHead className="py-3">Timestamp</TableHead>
+                        <TableHead>Agent</TableHead>
+                        <TableHead>Target Site</TableHead>
+                        <TableHead className="text-center w-24">Status</TableHead>
+                        <TableHead className="text-center w-32">TrustedForm</TableHead>
+                        <TableHead className="text-center w-32">Journaya</TableHead>
+                        <TableHead className="text-right w-32">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {submissionsQuery.isLoading || sitesQuery.isLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="text-center py-12">
+                            <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary/40" />
+                          </TableCell>
+                        </TableRow>
+                      ) : filteredData.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                            <div className="flex flex-col items-center gap-2">
+                              <Filter className="w-8 h-8 opacity-20" />
+                              <p className="font-medium">No individual submissions found matching filters</p>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        filteredData.map((sub) => {
+                          const tfUrl = sub.extractedData?.trusted_form_url;
+                          const journayaUrl = sub.extractedData?.journaya_url || sub.extractedData?.journaya_token;
+                          
+                          return (
+                            <TableRow key={sub.id} className="group hover:bg-muted/30 transition-colors">
+                              <TableCell className="py-3.5 font-mono text-[11px] text-muted-foreground whitespace-nowrap">
+                                {new Date(sub.createdAt).toLocaleString()}
+                              </TableCell>
+                              <TableCell className="font-medium text-sm">
+                                {sub.agentName || "Unknown Agent"}
+                              </TableCell>
+                              <TableCell className="font-bold text-sm">
+                                {getSiteName(sub.siteId)}
+                              </TableCell>
+                              <TableCell className="text-center">
+                                <Badge 
+                                  variant={sub.status === "success" ? "default" : "destructive"}
+                                  className={`h-5 text-[10px] font-bold px-2 py-0 ${sub.status === "success" 
+                                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/10" 
+                                    : "bg-destructive/10 border border-destructive/20 text-destructive hover:bg-destructive/10"}`}
+                                >
+                                  {sub.status === "success" ? "Success" : "Failed"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-center">
+                                {tfUrl ? (
+                                  <a 
+                                    href={tfUrl} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="inline-flex items-center gap-1 text-[11px] text-emerald-500 font-bold hover:underline"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                    Cert URL
+                                  </a>
+                                ) : (
+                                  <span className="text-[10px] text-muted-foreground/40 font-mono">N/A</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-center">
+                                {journayaUrl ? (
+                                  <a 
+                                    href={journayaUrl.startsWith('http') ? journayaUrl : `https://leads.activeprospect.com/leads/${journayaUrl}`}
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="inline-flex items-center gap-1 text-[11px] text-blue-500 font-bold hover:underline"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                    {journayaUrl.length > 10 && !journayaUrl.startsWith('http') ? `${journayaUrl.slice(0, 8)}...` : "Cert URL"}
+                                  </a>
+                                ) : (
+                                  <span className="text-[10px] text-muted-foreground/40 font-mono">N/A</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-1.5">
+                                  {sub.proxyHost && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      title="View Proxy Info"
+                                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                      onClick={() => setSelectedSubmissionProxy(sub)}
+                                    >
+                                      <Network className="w-3.5 h-3.5" />
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 text-xs gap-1"
+                                    onClick={() => setSelectedSubmissionPayload(sub.formData)}
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Payload
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
+
+      {/* Failure Details Dialog */}
       <Dialog open={!!selectedSiteFailures} onOpenChange={(open) => !open && setSelectedSiteFailures(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -1750,8 +1984,8 @@ export function SubmissionsTab() {
                     <span>{new Date(f.createdAt).toLocaleString()}</span>
                     <Badge variant="outline" className="h-4 text-[9px] font-mono">{f.proxyMethod || "direct"}</Badge>
                   </div>
-                  <p className="text-sm font-medium text-destructive leading-relaxed">
-                    {f.error || "Submission failed without a specific error message."}
+                  <p className="text-sm font-medium text-destructive leading-relaxed font-mono whitespace-pre-wrap">
+                    {f.errorMessage || f.error || "Submission failed without a specific error message."}
                   </p>
                 </div>
               ))}
@@ -1759,6 +1993,84 @@ export function SubmissionsTab() {
           </div>
           <div className="flex justify-end pt-2">
             <Button variant="secondary" onClick={() => setSelectedSiteFailures(null)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payload View Dialog */}
+      <Dialog open={!!selectedSubmissionPayload} onOpenChange={(open) => !open && setSelectedSubmissionPayload(null)}>
+        <DialogContent className="max-w-xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              Submission Form Payload
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto py-4 pr-1">
+            {selectedSubmissionPayload && Object.keys(selectedSubmissionPayload).length === 0 ? (
+              <p className="text-sm text-muted-foreground italic text-center py-6">No form fields were submitted.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                {selectedSubmissionPayload && Object.entries(selectedSubmissionPayload).map(([key, val]) => (
+                  <div key={key} className="p-3 rounded-lg border bg-muted/30 flex flex-col gap-1 min-w-0">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground truncate" title={key}>{key}</span>
+                    <span className="text-sm font-semibold text-foreground break-all">{String(val || "")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end pt-3 border-t">
+            <Button variant="secondary" onClick={() => setSelectedSubmissionPayload(null)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Proxy View Dialog */}
+      <Dialog open={!!selectedSubmissionProxy} onOpenChange={(open) => !open && setSelectedSubmissionProxy(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Network className="w-5 h-5 text-primary" />
+              Routing & Proxy Info
+            </DialogTitle>
+          </DialogHeader>
+          {selectedSubmissionProxy && (
+            <div className="space-y-4 py-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-lg border bg-muted/30">
+                  <p className="text-[9px] uppercase font-bold text-muted-foreground">Proxy Method</p>
+                  <p className="text-sm font-bold text-foreground capitalize mt-0.5">{selectedSubmissionProxy.proxyMethod || "direct"}</p>
+                </div>
+                <div className="p-3 rounded-lg border bg-muted/30">
+                  <p className="text-[9px] uppercase font-bold text-muted-foreground">Proxy Location</p>
+                  <p className="text-sm font-bold text-foreground mt-0.5 truncate">{selectedSubmissionProxy.proxyLocation || "N/A"}</p>
+                </div>
+                <div className="p-3 rounded-lg border bg-muted/30 col-span-2">
+                  <p className="text-[9px] uppercase font-bold text-muted-foreground">Proxy Hostname</p>
+                  <p className="text-sm font-mono text-foreground mt-0.5 break-all">{selectedSubmissionProxy.proxyHost || "N/A"}</p>
+                </div>
+                <div className="p-3 rounded-lg border bg-muted/30">
+                  <p className="text-[9px] uppercase font-bold text-muted-foreground">Proxy Port</p>
+                  <p className="text-sm font-mono text-foreground mt-0.5">{selectedSubmissionProxy.proxyPort || "N/A"}</p>
+                </div>
+                <div className="p-3 rounded-lg border bg-muted/30">
+                  <p className="text-[9px] uppercase font-bold text-muted-foreground">Fill Duration</p>
+                  <p className="text-sm font-mono font-bold text-foreground mt-0.5">
+                    {selectedSubmissionProxy.duration ? `${(selectedSubmissionProxy.duration / 1000).toFixed(1)}s` : "N/A"}
+                  </p>
+                </div>
+              </div>
+              {selectedSubmissionProxy.status === "failed" && selectedSubmissionProxy.errorMessage && (
+                <div className="p-3 rounded-lg border border-destructive/20 bg-destructive/5 space-y-1">
+                  <p className="text-[9px] uppercase font-bold text-destructive">Submission Error</p>
+                  <p className="text-xs text-destructive font-medium leading-relaxed font-mono whitespace-pre-wrap">{selectedSubmissionProxy.errorMessage}</p>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" onClick={() => setSelectedSubmissionProxy(null)}>Close</Button>
           </div>
         </DialogContent>
       </Dialog>
